@@ -186,7 +186,7 @@ class supply_chain_env_fixed_route(gym.Env):
             done = self.step_idx >= self.num_segments   # fixed: >=
             self.update_anomalies()
 
-            obs = None if done else self.get_obs()
+            obs = np.zeros(self.observation_space.shape) if done else self.get_obs()
             return obs, reward, done, False, {"total_time": self.total_time, "invalid_action": True}   
         
         # valid action 
@@ -202,9 +202,14 @@ class supply_chain_env_fixed_route(gym.Env):
         self.update_anomalies()
 
         if done:
-            obs = None
+           obs = np.zeros(self.observation_space.shape) if done else self.get_obs()
         else:
             obs = self.get_obs()
 
         info = {"total_time": self.total_time, "chosen_edge_id": action, "anomaly_factor": anomaly_factor}
         return obs, reward, done, False, info
+    
+    def render(self, mode='human'):
+        if mode == 'human' and self.step_idx < self.num_segments:
+            src, tgt = self.segments[self.step_idx]
+            print(f"Step {self.step_idx}/{self.num_segments} | Segment {src}->{tgt} | Total time: {self.total_time:.2f} min")
