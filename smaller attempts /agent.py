@@ -35,10 +35,10 @@ class Replay_Buffer():
     def sample(self, batch_size):
 
         batch  = random.sample(self.buffer,batch_size)
-        obs_batch = torch.FloatTensor([b[0] for b in batch])
+        obs_batch = torch.FloatTensor(np.array([b[0] for b in batch]))
         action_batch = torch.LongTensor([b[1] for b in batch])
         reward_batch = torch.FloatTensor([b[2] for b in batch])
-        next_obs_batch = torch.FloatTensor([b[3] for b in batch])
+        next_obs_batch = torch.FloatTensor(np.array([b[3] for b in batch]))
         done_batch = torch.FloatTensor([b[4] for b in batch])
 
         return obs_batch, action_batch, reward_batch, next_obs_batch, done_batch               
