@@ -84,8 +84,8 @@ class SupplyChainEnv(gym.Env):
         # ── Observation / action dimensions ────────────────────────────
         # Shipment features: 10
         self.shipment_dim = 10
-        # Node features: 8
-        self.node_dim = 8
+        # Node features: 9 (added dest-distance)
+        self.node_dim = 9
         # Edge features: 10
         self.edge_dim = 10
         # Vehicle features: 7
@@ -126,6 +126,10 @@ class SupplyChainEnv(gym.Env):
         self._current_neighbors: List[str] = []
         self._rng = random.Random()
 
+        # Pre-compute all-pairs shortest path times for feasibility checks
+        # We use base_time_hours as the weight (computed in config.auto_compute_times)
+        self._all_pairs_base_times = dict(nx.all_pairs_dijkstra_path_length(self.graph, weight='base_time_hours'))
+
     # ═══════════════════════════════════════════════════════════════════
     # Reset
     # ═══════════════════════════════════════════════════════════════════
@@ -136,12 +140,7 @@ class SupplyChainEnv(gym.Env):
             self._rng = random.Random(seed)
             np.random.seed(seed)
 
-        # Pick random source and destination (ensure they're different and reachable)
-        src, dst = self._pick_source_dest()
-        self.current_node = src
-        self.destination = dst
-
-        # Pick random shipment template
+        # Pick random shipment template first (needed for feasibility check)
         template = self._rng.choice(self.config.shipment_templates)
         self.shipment = ShipmentTemplate(
             product_type=template.product_type,
@@ -153,6 +152,21 @@ class SupplyChainEnv(gym.Env):
             priority=template.priority,
             insurance_value=template.insurance_value,
         )
+
+        # Pick random source and destination (ensuring feasibility within shelf life)
+        src, dst = self._pick_source_dest(self.shipment)
+        self.current_node = src
+        self.destination = dst
+
+        # Pre-compute shortest path distances to destination (for reward shaping)
+        self._dist_to_dest = {}
+        for node in self.location_names:
+            try:
+                self._dist_to_dest[node] = nx.shortest_path_length(
+                    self.graph, node, self.destination
+                )
+            except nx.NetworkXNoPath:
+                self._dist_to_dest[node] = self.config.max_steps
 
         # Reset vehicle positions to home locations
         self.vehicle_positions = {
@@ -166,6 +180,7 @@ class SupplyChainEnv(gym.Env):
 
         # Reset episode tracking
         self.previous_vehicle_type = None
+        self.previous_node = None  # For anti-backtracking
         self.step_count = 0
         self.total_time_hours = 0.0
         self.total_cost = 0.0
@@ -173,25 +188,37 @@ class SupplyChainEnv(gym.Env):
         self.path_taken = [self.current_node]
         self.leg_details = []
 
-        # Cache neighbors
+        # Cache neighbors (no backtrack filter on first step)
         self._current_neighbors = get_neighbors(self.graph, self.current_node)
 
         obs = self._build_obs()
         info = self._build_info()
         return obs, info
 
-    def _pick_source_dest(self) -> Tuple[str, str]:
-        """Pick source and destination ensuring path exists."""
+    def _pick_source_dest(self, shipment: ShipmentTemplate) -> Tuple[str, str]:
+        """Pick source and destination ensuring path exists and is feasible."""
         attempts = 0
         while attempts < 100:
             src = self._rng.choice(self.location_names)
             dst = self._rng.choice(self.location_names)
-            if src != dst and nx.has_path(self.graph, src, dst):
-                # Ensure minimum distance for interesting episodes
+            
+            if src == dst:
+                continue
+                
+            # Check if path exists
+            if dst not in self._all_pairs_base_times.get(src, {}):
+                continue
+                
+            # Feasibility check: base time should be < 70% of shelf life
+            # (leaving 30% for anomalies and sub-optimal routing)
+            base_time = self._all_pairs_base_times[src][dst]
+            if base_time < shipment.shelf_life_hours * 0.7:
                 return src, dst
+                
             attempts += 1
-        # Fallback
-        return self.location_names[0], self.location_names[-1]
+            
+        # Fallback to a guaranteed short path
+        return self.location_names[0], self.location_names[1]
 
     # ═══════════════════════════════════════════════════════════════════
     # Step
@@ -295,12 +322,12 @@ class SupplyChainEnv(gym.Env):
         # Reached destination
         if self.current_node == self.destination:
             done = True
-            reward += 10.0  # arrival bonus
+            reward += 50.0  # substantial arrival bonus
 
         # Max steps exceeded
         if self.step_count >= self.config.max_steps:
             truncated = True
-            reward -= 10.0  # truncation penalty
+            reward -= 15.0  # truncation penalty
 
         # Shelf life violation
         shelf_life_ratio = self.total_time_hours / self.shipment.shelf_life_hours
@@ -308,7 +335,7 @@ class SupplyChainEnv(gym.Env):
             done = True
             reward -= self.config.reward_weights.spoilage * 20.0
 
-        # ── Compute reward ────────────────────────────────────────────
+        # ── Compute per-step cost penalties ────────────────────────────
         w = self.config.reward_weights
 
         # Normalize components to comparable scales
@@ -326,8 +353,31 @@ class SupplyChainEnv(gym.Env):
         if shelf_life_ratio > 0.7:
             reward -= w.spoilage * (shelf_life_ratio - 0.7) * 2.0
 
-        # Update neighbors for next step
-        self._current_neighbors = get_neighbors(self.graph, self.current_node)
+        # ── Potential-based reward shaping (direction toward goal) ─────
+        # Uses pre-computed shortest-path hop distance as potential Φ.
+        # Reward = Φ(s) - Φ(s') = prev_dist - curr_dist
+        # Positive when moving closer, negative when moving away.
+        prev_node = self.path_taken[-2]
+        prev_dist = self._dist_to_dest.get(prev_node, self.config.max_steps)
+        curr_dist = self._dist_to_dest.get(self.current_node, self.config.max_steps)
+
+        direction_reward = (prev_dist - curr_dist) * 5.0
+        reward += direction_reward
+
+        # ── Loop penalty & step penalty ───────────────────────────────
+        visit_count = self.path_taken.count(self.current_node)
+        if visit_count > 1:
+            reward -= 5.0 * visit_count  # strong escalating revisit penalty
+            
+        reward -= 1.0  # Encourage finding the destination faster
+
+        # ── Update neighbors for next step (anti-backtracking) ────────
+        self.previous_node = prev_node
+        all_neighbors = get_neighbors(self.graph, self.current_node)
+        # Remove the node we just came from (unless it's the only neighbor)
+        if len(all_neighbors) > 1 and self.previous_node in all_neighbors:
+            all_neighbors = [n for n in all_neighbors if n != self.previous_node]
+        self._current_neighbors = all_neighbors
 
         obs = self._build_obs() if not (done or truncated) else np.zeros(
             self.obs_dim, dtype=np.float32
@@ -409,10 +459,12 @@ class SupplyChainEnv(gym.Env):
     def _encode_node(
         self, name: str, is_current: bool = False, is_dest: bool = False
     ) -> list:
-        """Encode a location node as a feature vector (dim=8)."""
+        """Encode a location node as a feature vector (dim=9)."""
         loc = self.config.location_by_name(name)
         risk = self.anomaly_engine.node_risk_score(name)
         region_map = {"metro": 1.0, "urban": 0.7, "hub": 0.8, "port": 0.6, "rural": 0.3, "coastal": 0.5}
+        d = self._dist_to_dest.get(name, self.config.max_steps)
+        max_d = max(self._dist_to_dest.values()) if self._dist_to_dest else 10
 
         return [
             loc.lat / 35.0,          # normalize India lat range ~8-35
@@ -423,6 +475,7 @@ class SupplyChainEnv(gym.Env):
             loc.warehouse_fill_ratio if loc.has_warehouse else 0.0,
             float(is_current),
             float(is_dest),
+            d / max(max_d, 1),       # normalized distance to destination
         ]
 
     def _encode_edge(self, src: str, tgt: str) -> list:
@@ -498,6 +551,8 @@ class SupplyChainEnv(gym.Env):
             "time_engine": self.time_engine,
             "step_count": self.step_count,
             "total_time_hours": self.total_time_hours,
+            "dist_to_dest": self._dist_to_dest,
+            "neighbors": list(self._current_neighbors),
         }
 
     def render(self):

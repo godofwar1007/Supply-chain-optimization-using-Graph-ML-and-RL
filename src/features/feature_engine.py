@@ -76,11 +76,15 @@ class FeatureEngine:
         loc_idx = {name: i for i, name in enumerate(loc_names)}
 
         # ══════════════════════════════════════════════════════════════
-        # Location node features
+        # Location node features (9 features per node)
         # ══════════════════════════════════════════════════════════════
         loc_features = []
+        dist_to_dest = state.get("dist_to_dest", {})
+        max_dist = max(dist_to_dest.values()) if dist_to_dest else 10
         for loc in config.locations:
             risk = anomaly_engine.node_risk_score(loc.name)
+            # Normalized distance to destination (0 = at dest, 1 = farthest)
+            d = dist_to_dest.get(loc.name, max_dist)
             loc_features.append([
                 loc.lat / 35.0,
                 loc.lng / 100.0,
@@ -90,6 +94,7 @@ class FeatureEngine:
                 loc.warehouse_fill_ratio if loc.has_warehouse else 0.0,
                 float(loc.name == current_node),
                 float(loc.name == destination),
+                d / max(max_dist, 1),  # normalized distance to destination
             ])
         data["location"].x = torch.tensor(loc_features, dtype=torch.float)
 
@@ -208,11 +213,14 @@ class FeatureEngine:
             data.current_node_idx = torch.tensor([0], dtype=torch.long)
             
         # The environment uses env._current_neighbors for the action space index
-        # We need to map those neighbors to their location node indices
-        # state["neighbors"] is not passed to get_graph_state yet. 
-        # Wait, get_graph_state() doesn't have neighbors. I'll get neighbors from graph directly.
-        from src.utils.graph_utils import get_neighbors
-        neighbors = get_neighbors(graph, current_node)
+        # We map the environment's filtered neighbors to their location node indices
+        # to ensure the Actor's logits perfectly align with the Environment's action indices.
+        neighbors = state.get("neighbors", [])
+        if not neighbors:
+            # Fallback for older states or testing
+            from src.utils.graph_utils import get_neighbors
+            neighbors = get_neighbors(graph, current_node)
+            
         neighbor_indices = [loc_idx[n] for n in neighbors if n in loc_idx]
         data.neighbor_indices = torch.tensor(neighbor_indices, dtype=torch.long)
 

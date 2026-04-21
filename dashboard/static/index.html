@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SupplyChain AI — Smart Route Optimizer</title>
+    <meta name="description" content="AI-powered supply chain route optimization using Graph Neural Networks and Deep Reinforcement Learning">
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- ══════════════════════════════════════════════════ -->
+    <!--  TOP BAR                                          -->
+    <!-- ══════════════════════════════════════════════════ -->
+    <header id="header">
+        <div class="header-left">
+            <div class="logo">
+                <span class="logo-icon">◈</span>
+                <span class="logo-text">SupplyChain<span class="accent">AI</span></span>
+            </div>
+            <span class="tagline">GNN + RL Route Optimizer</span>
+        </div>
+        <div class="header-right">
+            <div class="status-badge" id="status-badge">
+                <span class="status-dot"></span>
+                <span class="status-text">Ready</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- ══════════════════════════════════════════════════ -->
+    <!--  MAIN LAYOUT                                      -->
+    <!-- ══════════════════════════════════════════════════ -->
+    <main id="main-layout">
+        <!-- LEFT PANEL: Controls + Metrics -->
+        <aside id="left-panel">
+            <!-- Controls Card -->
+            <section class="card" id="controls-card">
+                <h2 class="card-title">
+                    <span class="card-icon">⚙</span>
+                    Simulation Controls
+                </h2>
+                <div class="control-group">
+                    <label for="scenario-select">Network</label>
+                    <select id="scenario-select">
+                        <option value="india" selected>India (25 nodes)</option>
+                        <option value="small">Test (4 nodes)</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="agent-select">Agent</label>
+                    <select id="agent-select">
+                        <option value="random">Random Baseline</option>
+                        <option value="trained">Trained GNN+RL</option>
+                    </select>
+                    <span id="agent-status" class="agent-status-text"></span>
+                </div>
+                <div class="control-group">
+                    <label for="speed-slider">Animation Speed</label>
+                    <div class="slider-row">
+                        <input type="range" id="speed-slider" min="200" max="3000" value="1000" step="100">
+                        <span id="speed-label" class="slider-value">1.0s</span>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <label for="seed-input">Seed (optional)</label>
+                    <input type="number" id="seed-input" placeholder="Random" min="0" max="99999">
+                </div>
+                <button id="btn-simulate" class="btn-primary">
+                    <span class="btn-icon">▶</span>
+                    Run Simulation
+                </button>
+                <button id="btn-stop" class="btn-secondary" disabled>
+                    <span class="btn-icon">■</span>
+                    Stop
+                </button>
+            </section>
+
+            <!-- Shipment Info Card -->
+            <section class="card" id="shipment-card" style="display: none;">
+                <h2 class="card-title">
+                    <span class="card-icon">📦</span>
+                    Active Shipment
+                </h2>
+                <div id="shipment-info" class="info-grid"></div>
+            </section>
+
+            <!-- Live Metrics Card -->
+            <section class="card" id="metrics-card" style="display: none;">
+                <h2 class="card-title">
+                    <span class="card-icon">📊</span>
+                    Live Metrics
+                </h2>
+                <div class="metrics-grid">
+                    <div class="metric" id="metric-steps">
+                        <span class="metric-label">Steps</span>
+                        <span class="metric-value" id="val-steps">—</span>
+                    </div>
+                    <div class="metric" id="metric-time">
+                        <span class="metric-label">Travel Time</span>
+                        <span class="metric-value" id="val-time">—</span>
+                    </div>
+                    <div class="metric" id="metric-cost">
+                        <span class="metric-label">Total Cost</span>
+                        <span class="metric-value" id="val-cost">—</span>
+                    </div>
+                    <div class="metric" id="metric-risk">
+                        <span class="metric-label">Cumulative Risk</span>
+                        <span class="metric-value" id="val-risk">—</span>
+                    </div>
+                    <div class="metric" id="metric-reward">
+                        <span class="metric-label">Reward</span>
+                        <span class="metric-value" id="val-reward">—</span>
+                    </div>
+                    <div class="metric" id="metric-shelf">
+                        <span class="metric-label">Shelf Life</span>
+                        <div class="progress-bar-container">
+                            <div class="progress-bar" id="shelf-bar"></div>
+                        </div>
+                        <span class="metric-value metric-small" id="val-shelf">—</span>
+                    </div>
+                </div>
+            </section>
+        </aside>
+
+        <!-- CENTER: Map -->
+        <section id="map-container">
+            <div id="map"></div>
+            <!-- Overlay for delivery status -->
+            <div id="delivery-overlay" class="overlay" style="display: none;">
+                <div class="overlay-content" id="delivery-content"></div>
+            </div>
+        </section>
+
+        <!-- RIGHT PANEL: Step Log -->
+        <aside id="right-panel">
+            <section class="card" id="log-card">
+                <h2 class="card-title">
+                    <span class="card-icon">📋</span>
+                    Route Log
+                </h2>
+                <div id="step-log" class="step-log">
+                    <div class="log-placeholder">
+                        Run a simulation to see the route log here.
+                    </div>
+                </div>
+            </section>
+        </aside>
+    </main>
+
+    <!-- Scripts -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="/static/app.js"></script>
+</body>
+</html>
