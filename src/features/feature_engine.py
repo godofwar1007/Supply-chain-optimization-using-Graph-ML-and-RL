@@ -201,6 +201,21 @@ class FeatureEngine:
             dtype=torch.float,
         )
 
+        # Attach indices for action selection in the Actor network
+        if current_node in loc_idx:
+            data.current_node_idx = torch.tensor([loc_idx[current_node]], dtype=torch.long)
+        else:
+            data.current_node_idx = torch.tensor([0], dtype=torch.long)
+            
+        # The environment uses env._current_neighbors for the action space index
+        # We need to map those neighbors to their location node indices
+        # state["neighbors"] is not passed to get_graph_state yet. 
+        # Wait, get_graph_state() doesn't have neighbors. I'll get neighbors from graph directly.
+        from src.utils.graph_utils import get_neighbors
+        neighbors = get_neighbors(graph, current_node)
+        neighbor_indices = [loc_idx[n] for n in neighbors if n in loc_idx]
+        data.neighbor_indices = torch.tensor(neighbor_indices, dtype=torch.long)
+
         # Make the graph undirected so vehicles and shipments receive messages from locations
         # (adds rev_route, rev_vehicle_at, etc.)
         data = T.ToUndirected()(data)
