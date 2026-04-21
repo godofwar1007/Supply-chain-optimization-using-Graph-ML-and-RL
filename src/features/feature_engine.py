@@ -15,6 +15,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 import torch
+import torch_geometric.transforms as T
 from torch_geometric.data import HeteroData
 
 from src.config.default_config import (
@@ -199,5 +200,9 @@ class FeatureEngine:
             [[step_count / 40.0, total_time_hours / max(shipment.shelf_life_hours, 1)]],
             dtype=torch.float,
         )
+
+        # Make the graph undirected so vehicles and shipments receive messages from locations
+        # (adds rev_route, rev_vehicle_at, etc.)
+        data = T.ToUndirected()(data)
 
         return data
