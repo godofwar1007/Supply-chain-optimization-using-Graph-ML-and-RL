@@ -97,6 +97,7 @@ class AnomalyEngine:
         self,
         edge_keys: List[Tuple[str, str]],
         node_keys: List[str],
+        volatile_keys: List[Tuple[str, str]] = None,
         warmup_steps: int = 5,
     ):
         """
@@ -105,6 +106,7 @@ class AnomalyEngine:
         """
         self.edge_anomalies = {k: [] for k in edge_keys}
         self.node_anomalies = {k: [] for k in node_keys}
+        self.volatile_keys = set(volatile_keys or [])
 
         for _ in range(warmup_steps):
             self.step()
@@ -115,27 +117,36 @@ class AnomalyEngine:
 
         for atype, cfg in type_configs.items():
             if cfg.affects in ("edges", "both"):
-                self._update_dict(self.edge_anomalies, atype, cfg)
+                self._update_dict(self.edge_anomalies, atype, cfg, is_edge=True)
             if cfg.affects in ("nodes", "both"):
-                self._update_dict(self.node_anomalies, atype, cfg)
+                self._update_dict(self.node_anomalies, atype, cfg, is_edge=False)
 
     def _update_dict(
         self,
         anomaly_dict: Dict,
         atype: str,
         cfg: AnomalyTypeConfig,
+        is_edge: bool = False,
     ):
         """Spawn / expire anomalies for one dict (edges or nodes)."""
         # Apply curriculum scale to the spawn probability only —
         # disappear probability stays unchanged so existing anomalies
         # clear at the normal rate.
-        scaled_appear = cfg.prob_appear_per_step * self._spawn_scale
+        base_appear = cfg.prob_appear_per_step * self._spawn_scale
 
         for key, active_list in anomaly_dict.items():
             # --- Spawn new ---
+            # Volatile edges have 3x higher spawn probability and higher minimum severity
+            spawn_prob = base_appear
+            severity_min = cfg.severity_min
+            
+            if is_edge and key in self.volatile_keys:
+                spawn_prob = min(0.9, base_appear * 3.0)
+                severity_min = (cfg.severity_min + cfg.severity_max) / 2.0
+
             already_has = any(a.anomaly_type == atype for a in active_list)
-            if not already_has and self.rng.random() < scaled_appear:
-                severity = self.rng.uniform(cfg.severity_min, cfg.severity_max)
+            if not already_has and self.rng.random() < spawn_prob:
+                severity = self.rng.uniform(severity_min, cfg.severity_max)
                 active_list.append(ActiveAnomaly(
                     anomaly_type=atype,
                     severity=severity,
@@ -207,3 +218,23 @@ class AnomalyEngine:
         total = sum(len(v) for v in self.edge_anomalies.values())
         total += sum(len(v) for v in self.node_anomalies.values())
         return total
+
+    def get_all_active_anomalies(self) -> dict:
+        """Return all active edge and node anomalies across the entire graph."""
+        edges = {}
+        for (src, tgt), anomalies in self.edge_anomalies.items():
+            if anomalies:
+                edges[f"{src}___{tgt}"] = [
+                    {"type": a.anomaly_type, "severity": round(a.severity, 2)}
+                    for a in anomalies
+                ]
+        
+        nodes = {}
+        for node, anomalies in self.node_anomalies.items():
+            if anomalies:
+                nodes[node] = [
+                    {"type": a.anomaly_type, "severity": round(a.severity, 2)}
+                    for a in anomalies
+                ]
+        
+        return {"edges": edges, "nodes": nodes}

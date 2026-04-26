@@ -52,6 +52,7 @@
                     <label for="scenario-select">Network</label>
                     <select id="scenario-select">
                         <option value="india" selected>India (25 nodes)</option>
+                        <option value="volatile">Volatile (Stress Test)</option>
                         <option value="small">Test (4 nodes)</option>
                     </select>
                 </div>
@@ -127,6 +128,17 @@
                         </div>
                         <span class="metric-value metric-small" id="val-shelf">—</span>
                     </div>
+                </div>
+            </section>
+
+            <!-- Global Anomalies Card -->
+            <section class="card" id="anomalies-card" style="display: none;">
+                <h2 class="card-title">
+                    <span class="card-icon">⚠️</span>
+                    Network Disruptions
+                </h2>
+                <div id="global-anomalies-list" class="anomalies-list">
+                    <div class="log-placeholder">No active disruptions.</div>
                 </div>
             </section>
         </aside>

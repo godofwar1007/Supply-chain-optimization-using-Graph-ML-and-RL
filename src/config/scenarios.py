@@ -330,3 +330,44 @@ def india_scenario() -> ScenarioConfig:
     )
     cfg.auto_compute_times()
     return cfg
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Volatile Scenario (Stress Test)
+# ═══════════════════════════════════════════════════════════════════
+
+def volatile_scenario() -> ScenarioConfig:
+    """
+    Stress-test scenario: Primary high-speed routes are extremely volatile.
+    
+    A "Golden Quadrilateral" connects Delhi-Mumbai-Chennai-Kolkata with
+    high-speed, low-toll roads, but they are flagged as 'is_volatile'.
+    Alternative paths through central India (Bhopal, Nagpur, Hyderabad)
+    are more stable but have higher base costs/times.
+    """
+    india = india_scenario()
+    
+    # 1. Identify primary path (Golden Quadrilateral + main trunks)
+    primary_edges = {
+        ("Delhi", "Agra"), ("Agra", "Mumbai"), ("Mumbai", "Surat"), 
+        ("Surat", "Ahmedabad"), ("Mumbai", "Pune"), ("Pune", "Bangalore"),
+        ("Bangalore", "Chennai"), ("Chennai", "Visakhapatnam"),
+        ("Visakhapatnam", "Bhubaneswar"), ("Bhubaneswar", "Kolkata"),
+        ("Kolkata", "Varanasi"), ("Varanasi", "Agra"), ("Delhi", "Jaipur")
+    }
+
+    # 2. Update routes: Make primary paths very efficient but volatile
+    for route in india.routes:
+        if (route.source, route.target) in primary_edges or (route.target, route.source) in primary_edges:
+            route.is_volatile = True
+            route.road_grading = 0.95  # Fast roads
+            route.toll_cost *= 0.5     # Cheap tolls to lure the agent
+        else:
+            # Stable alternative paths: slightly worse but reliable
+            route.is_volatile = False
+            route.road_grading = 0.75  # Slower roads
+            route.toll_cost *= 1.2     # Higher tolls
+
+    india.name = "india_volatile"
+    india.auto_compute_times()
+    return india

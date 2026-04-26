@@ -20,6 +20,8 @@
     const shipmentCard     = document.getElementById("shipment-card");
     const shipmentInfo     = document.getElementById("shipment-info");
     const metricsCard      = document.getElementById("metrics-card");
+    const anomaliesCard    = document.getElementById("anomalies-card");
+    const anomaliesList    = document.getElementById("global-anomalies-list");
     const stepLog          = document.getElementById("step-log");
     const deliveryOverlay  = document.getElementById("delivery-overlay");
     const deliveryContent  = document.getElementById("delivery-content");
@@ -49,15 +51,17 @@
     }).addTo(map);
 
     // Map layer groups
-    const edgeLayer       = L.layerGroup().addTo(map);
-    const nodeLayer       = L.layerGroup().addTo(map);
-    const activePathLayer = L.layerGroup().addTo(map);
-    const animationLayer  = L.layerGroup().addTo(map);
+    const edgeLayer         = L.layerGroup().addTo(map);
+    const optimalPathLayer  = L.layerGroup().addTo(map);
+    const nodeLayer         = L.layerGroup().addTo(map);
+    const activePathLayer   = L.layerGroup().addTo(map);
+    const animationLayer    = L.layerGroup().addTo(map);
 
     // State
     let ws = null;
     let networkData = null;
     let markers = {};
+    let edgeMarkers = {}; // keyed by "src___tgt"
     let cumulativeReward = 0;
 
     // ── Speed Slider ────────────────────────────────────────────
@@ -75,10 +79,12 @@
 
     function renderNetwork(data) {
         edgeLayer.clearLayers();
+        optimalPathLayer.clearLayers();
         nodeLayer.clearLayers();
         activePathLayer.clearLayers();
         animationLayer.clearLayers();
         markers = {};
+        edgeMarkers = {};
 
         // Draw edges first (behind nodes)
         for (const edge of data.edges) {
@@ -94,8 +100,10 @@
                 coastal: "hsla(180, 60%, 45%, 0.25)",
             };
 
+            const baseColor = terrainColors[edge.terrain] || "hsla(200, 60%, 45%, 0.2)";
+
             const line = L.polyline(latlngs, {
-                color: terrainColors[edge.terrain] || "hsla(200, 60%, 45%, 0.2)",
+                color: baseColor,
                 weight: 1.5,
                 opacity: 0.6,
                 dashArray: "4 6",
@@ -112,6 +120,11 @@
             `);
 
             edgeLayer.addLayer(line);
+            edgeMarkers[`${edge.source}___${edge.target}`] = {
+                line: line,
+                baseColor: baseColor,
+                latlngs: latlngs
+            };
         }
 
         // Draw nodes
@@ -150,7 +163,11 @@
                 className: "city-label",
             });
 
-            markers[node.id] = marker;
+            markers[node.id] = {
+                marker: marker,
+                lat: node.lat,
+                lng: node.lng
+            };
         }
     }
 
@@ -232,8 +249,11 @@
             renderNetwork(data.network);
         }
 
-        // Show shipment card
+        // Show cards
         shipmentCard.style.display = "block";
+        metricsCard.style.display = "block";
+        anomaliesCard.style.display = "block";
+
         const s = data.shipment;
         const agentMode = data.agent_mode || "random";
         const agentLabel = agentMode === "trained"
@@ -266,12 +286,14 @@
             </div>
         `;
 
-        // Show metrics card
-        metricsCard.style.display = "block";
-
         // Highlight source and destination on the map
         highlightNode(data.source, "source");
         highlightNode(data.destination, "destination");
+
+        // Draw initial optimal path
+        if (data.nominal_path) {
+            drawOptimalPath(data.nominal_path, true);
+        }
     }
 
     // ── Step Handler ────────────────────────────────────────────
@@ -297,6 +319,17 @@
                 (pct < 20 ? " danger" : pct < 50 ? " warning" : "");
         }
 
+        // Handle anomalies
+        if (data.global_anomalies) {
+            updateMapAnomalies(data.global_anomalies);
+            updateAnomaliesUI(data.global_anomalies);
+        }
+
+        // Update current optimal path
+        if (data.optimal_path) {
+            drawOptimalPath(data.optimal_path, false);
+        }
+
         // Draw active path segment
         drawPathSegment(data);
 
@@ -305,6 +338,109 @@
 
         // Add log entry
         addLogEntry(data);
+    }
+
+    function drawOptimalPath(path, isInitial) {
+        if (!path || path.length < 2) return;
+        
+        // Clear previous dynamic optimal path
+        if (!isInitial) {
+            // We want to clear only the dynamic one. Let's tag them.
+            optimalPathLayer.eachLayer(layer => {
+                if (layer.options.isDynamic) optimalPathLayer.removeLayer(layer);
+            });
+        }
+
+        const latlngs = path.map(nodeId => [markers[nodeId].lat, markers[nodeId].lng]);
+        
+        const style = isInitial ? {
+            color: "hsl(145, 70%, 50%)",
+            weight: 2,
+            opacity: 0.3,
+            dashArray: "10, 10",
+            interactive: false
+        } : {
+            color: "hsl(200, 90%, 55%)",
+            weight: 3,
+            opacity: 0.5,
+            dashArray: "5, 5",
+            interactive: false,
+            isDynamic: true
+        };
+
+        const line = L.polyline(latlngs, style);
+        optimalPathLayer.addLayer(line);
+    }
+
+    function updateMapAnomalies(globalAnomalies) {
+        // Reset all edges to base style
+        for (const key in edgeMarkers) {
+            const m = edgeMarkers[key];
+            m.line.setStyle({ color: m.baseColor, weight: 1.5, dashArray: "4 6", opacity: 0.6 });
+        }
+
+        // Reset all node anomaly highlights (but preserve source/dest/active)
+        document.querySelectorAll(".city-marker.anomaly").forEach(m => m.classList.remove("anomaly"));
+
+        // Highlight edges with anomalies - use a subtler highlight so it doesn't look like everything is red
+        if (globalAnomalies.edges) {
+            for (const key in globalAnomalies.edges) {
+                const marker = edgeMarkers[key];
+                if (marker) {
+                    marker.line.setStyle({
+                        color: "hsl(0, 75%, 60%)",
+                        weight: 2.5,
+                        dashArray: "2, 4", // Dashed to distinguish from paths
+                        opacity: 0.8
+                    });
+                }
+            }
+        }
+
+        // Highlight nodes with anomalies
+        if (globalAnomalies.nodes) {
+            for (const node in globalAnomalies.nodes) {
+                const el = document.getElementById(`marker-${node}`);
+                if (el) el.classList.add("anomaly");
+            }
+        }
+    }
+
+    function updateAnomaliesUI(globalAnomalies) {
+        anomaliesList.innerHTML = "";
+        
+        const edgeAnoms = globalAnomalies.edges || {};
+        const nodeAnoms = globalAnomalies.nodes || {};
+        
+        const all = [];
+        for (const key in edgeAnoms) {
+            const [src, tgt] = key.split("___");
+            edgeAnoms[key].forEach(a => all.push({ ...a, target: `${src} → ${tgt}`, targetType: "edge" }));
+        }
+        for (const node in nodeAnoms) {
+            nodeAnoms[node].forEach(a => all.push({ ...a, target: node, targetType: "node" }));
+        }
+
+        if (all.length === 0) {
+            anomaliesList.innerHTML = '<div class="log-placeholder">No active disruptions.</div>';
+            return;
+        }
+
+        // Sort by severity
+        all.sort((a, b) => b.severity - a.severity);
+
+        all.forEach(a => {
+            const item = document.createElement("div");
+            item.className = `anomaly-item ${a.type}`;
+            item.innerHTML = `
+                <div class="anomaly-item-header">
+                    <span>${a.type.toUpperCase()}</span>
+                    <span>${a.severity}x</span>
+                </div>
+                <div class="anomaly-item-target">${a.target}</div>
+            `;
+            anomaliesList.appendChild(item);
+        });
     }
 
     // ── Done Handler ────────────────────────────────────────────
@@ -347,8 +483,8 @@
 
     // ── Map Helpers ─────────────────────────────────────────────
     function highlightNode(nodeId, type) {
-        const marker = markers[nodeId];
-        if (!marker) return;
+        const mObj = markers[nodeId];
+        if (!mObj) return;
 
         const el = document.getElementById(`marker-${nodeId}`);
         if (el) {
@@ -469,13 +605,20 @@
     function resetUI() {
         deliveryOverlay.style.display = "none";
         activePathLayer.clearLayers();
+        optimalPathLayer.clearLayers();
         animationLayer.clearLayers();
         cumulativeReward = 0;
 
         // Remove highlighting from markers
         document.querySelectorAll(".city-marker").forEach(m => {
-            m.classList.remove("active", "source", "destination");
+            m.classList.remove("active", "source", "destination", "anomaly");
         });
+
+        // Reset edge styles
+        for (const key in edgeMarkers) {
+            const m = edgeMarkers[key];
+            m.line.setStyle({ color: m.baseColor, weight: 1.5, dashArray: "4 6", opacity: 0.6 });
+        }
 
         // Reset metrics
         valSteps.textContent = "—";
@@ -488,8 +631,9 @@
         shelfBar.style.width = "100%";
         shelfBar.className = "progress-bar";
 
-        // Clear log
+        // Clear log and anomalies
         stepLog.innerHTML = "";
+        anomaliesList.innerHTML = '<div class="log-placeholder">No active disruptions.</div>';
     }
 
     function setStatus(type, text) {

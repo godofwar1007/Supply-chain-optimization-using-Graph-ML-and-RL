@@ -20,6 +20,7 @@ from typing import Any, Optional
 
 import torch
 import numpy as np
+import networkx as nx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -28,8 +29,7 @@ from pydantic import BaseModel
 # Project root
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-
-from src.config.scenarios import india_scenario, small_scenario
+from src.config.scenarios import india_scenario, small_scenario, volatile_scenario
 from src.environment.supply_chain_env import SupplyChainEnv
 from src.features.feature_engine import FeatureEngine
 from src.models.ppo_agent import ActorCritic
@@ -46,6 +46,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 SCENARIOS = {
     "india": india_scenario,
     "small": small_scenario,
+    "volatile": volatile_scenario,
 }
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -261,12 +262,21 @@ async def websocket_simulate(websocket: WebSocket):
             else:
                 agent_mode = "random"  # Fallback
 
+        # Calculate nominal shortest path (from original source to destination)
+        try:
+            nominal_path = nx.shortest_path(
+                env.graph, env.path_taken[0], env.destination, weight="base_time_hours"
+            )
+        except:
+            nominal_path = []
+
         # Send initial state
         await websocket.send_json({
             "type": "init",
             "source": env.path_taken[0],
             "destination": env.destination,
             "agent_mode": agent_mode,
+            "nominal_path": nominal_path,
             "shipment": {
                 "product_type": env.shipment.product_type,
                 "weight_kg": round(env.shipment.weight_kg, 0),
@@ -297,6 +307,14 @@ async def websocket_simulate(websocket: WebSocket):
             src_loc = config.location_by_name(leg["from"])
             tgt_loc = config.location_by_name(leg["to"])
 
+            # Current nominal shortest path from where we are now
+            try:
+                current_optimal_path = nx.shortest_path(
+                    env.graph, env.current_node, env.destination, weight="base_time_hours"
+                )
+            except:
+                current_optimal_path = []
+
             await websocket.send_json({
                 "type": "step",
                 "step": env.step_count,
@@ -311,6 +329,8 @@ async def websocket_simulate(websocket: WebSocket):
                 "cost": round(leg["cost"].total, 0),
                 "risk": round(leg["risk"], 3),
                 "anomalies": anomalies,
+                "global_anomalies": env.anomaly_engine.get_all_active_anomalies(),
+                "optimal_path": current_optimal_path,
                 "reward": round(reward, 2),
                 "total_time": round(env.total_time_hours, 1),
                 "total_cost": round(env.total_cost, 0),

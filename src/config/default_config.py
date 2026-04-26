@@ -43,6 +43,7 @@ class RouteConfig:
     toll_cost: float = 0.0              # ₹
     mileage_cost_per_km: float = 5.0    # ₹/km
     bidirectional: bool = True
+    is_volatile: bool = False           # If true, more prone to high-severity anomalies
 
 
 @dataclass

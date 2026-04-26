@@ -699,36 +699,61 @@ input[type="range"]::-webkit-slider-thumb {
     white-space: nowrap;
 }
 
-/* ── Leaflet Popup Override ──────────────────────────────────── */
-.leaflet-popup-content-wrapper {
-    background: var(--bg-card) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: var(--radius-sm) !important;
-    box-shadow: var(--shadow-lg) !important;
-    color: var(--text-primary) !important;
-    backdrop-filter: blur(var(--blur));
+/* ── Anomalies List ────────────────────────────────────────── */
+.anomalies-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap-xs);
+    max-height: 200px;
+    overflow-y: auto;
 }
 
-.leaflet-popup-tip {
-    background: var(--bg-card) !important;
-    border: 1px solid var(--border) !important;
+.anomaly-item {
+    background: hsla(0, 0%, 100%, 0.05);
+    border-radius: var(--radius-sm);
+    padding: 6px 10px;
+    font-size: 11px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    border-left: 2px solid var(--text-muted);
 }
 
-.leaflet-popup-content {
-    font-family: var(--font-body) !important;
-    font-size: 12px !important;
-    line-height: 1.6 !important;
+.anomaly-item.weather      { border-left-color: hsl(200, 70%, 50%); }
+.anomaly-item.traffic      { border-left-color: var(--orange); }
+.anomaly-item.geopolitical { border-left-color: var(--red); }
+.anomaly-item.sentiment    { border-left-color: var(--purple); }
+
+.anomaly-item-header {
+    display: flex;
+    justify-content: space-between;
+    font-weight: 600;
 }
 
-.popup-title {
-    font-weight: 700;
-    font-size: 14px;
-    margin-bottom: 6px;
-    color: var(--accent);
-}
-
-.popup-detail {
+.anomaly-item-target {
     color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 10px;
+}
+
+/* ── Map Highlights ────────────────────────────────────────── */
+.city-marker.anomaly {
+    border-color: var(--red);
+    box-shadow: 0 0 12px var(--red-glow);
+    animation: anomaly-pulse 1s infinite;
+}
+
+@keyframes anomaly-pulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.2); opacity: 0.8; }
+}
+
+/* ── Leaflet Popup Customizations for Anomalies ────────────── */
+.popup-anomaly-title {
+    color: var(--red);
+    font-weight: 700;
+    margin-bottom: 4px;
+    font-size: 13px;
 }
 
 /* ── Responsive ──────────────────────────────────────────────── */

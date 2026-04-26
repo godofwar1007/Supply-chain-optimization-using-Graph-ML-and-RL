@@ -209,7 +209,15 @@ class SupplyChainEnv(gym.Env):
 
         # Reset engines
         edge_keys = get_all_edge_keys(self.config)
-        self.anomaly_engine.initialize(edge_keys, self.location_names)
+        
+        volatile_keys = []
+        for r in self.config.routes:
+            if r.is_volatile:
+                volatile_keys.append((r.source, r.target))
+                if r.bidirectional:
+                    volatile_keys.append((r.target, r.source))
+        
+        self.anomaly_engine.initialize(edge_keys, self.location_names, volatile_keys=volatile_keys)
         self.time_engine.randomize(self._rng)
 
         # Reset episode tracking
