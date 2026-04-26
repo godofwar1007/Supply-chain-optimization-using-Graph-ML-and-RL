@@ -91,8 +91,8 @@ class AnomalyConfig:
     """All anomaly types."""
     weather: AnomalyTypeConfig = field(
         default_factory=lambda: AnomalyTypeConfig(
-            prob_appear_per_step=0.12,
-            prob_disappear_per_step=0.15,
+            prob_appear_per_step=0.30,
+            prob_disappear_per_step=0.05,
             severity_min=1.2,
             severity_max=2.5,
             affects="both",
@@ -100,8 +100,8 @@ class AnomalyConfig:
     )
     traffic: AnomalyTypeConfig = field(
         default_factory=lambda: AnomalyTypeConfig(
-            prob_appear_per_step=0.20,
-            prob_disappear_per_step=0.30,
+            prob_appear_per_step=0.40,
+            prob_disappear_per_step=0.10,
             severity_min=1.1,
             severity_max=1.8,
             affects="edges",
@@ -109,8 +109,8 @@ class AnomalyConfig:
     )
     sentiment: AnomalyTypeConfig = field(
         default_factory=lambda: AnomalyTypeConfig(
-            prob_appear_per_step=0.05,
-            prob_disappear_per_step=0.08,
+            prob_appear_per_step=0.15,
+            prob_disappear_per_step=0.02,
             severity_min=1.0,
             severity_max=1.5,
             cost_multiplier=1.3,
@@ -119,8 +119,8 @@ class AnomalyConfig:
     )
     geopolitical: AnomalyTypeConfig = field(
         default_factory=lambda: AnomalyTypeConfig(
-            prob_appear_per_step=0.03,
-            prob_disappear_per_step=0.05,
+            prob_appear_per_step=0.10,
+            prob_disappear_per_step=0.02,
             severity_min=1.5,
             severity_max=3.0,
             cost_multiplier=2.0,

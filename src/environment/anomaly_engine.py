@@ -7,6 +7,10 @@ and carries a severity multiplier that affects travel time and cost.
 
 Designed with a clean interface so real data sources (weather APIs, news
 sentiment models) can replace the stochastic generators later.
+
+Supports dynamic spawn probability scaling for curriculum learning:
+  engine.set_phase(1)          # Phase 1 — 30% of base spawn rates
+  engine.set_spawn_scale(0.6)  # Or set any scale directly
 """
 
 from __future__ import annotations
@@ -35,6 +39,9 @@ class AnomalyEngine:
     having multiple concurrent anomalies of different types.
     """
 
+    # Phase-to-scale mapping for curriculum learning
+    _PHASE_SCALE = {1: 0.3, 2: 0.6, 3: 1.0}
+
     def __init__(self, config: AnomalyConfig, rng: Optional[random.Random] = None):
         self.config = config
         self.rng = rng or random.Random()
@@ -42,6 +49,40 @@ class AnomalyEngine:
         # Active anomalies keyed by location name or (src, tgt) edge tuple
         self.edge_anomalies: Dict[Tuple[str, str], List[ActiveAnomaly]] = {}
         self.node_anomalies: Dict[str, List[ActiveAnomaly]] = {}
+
+        # ── Curriculum scaling ─────────────────────────────────────────
+        # Scale factor applied to all prob_appear values (0.0–1.0).
+        # Allows the training loop to reduce anomaly frequency for
+        # early curriculum phases, then ramp up to full difficulty.
+        self._spawn_scale: float = 1.0
+
+    def set_spawn_scale(self, scale: float) -> None:
+        """
+        Set the spawn-probability scale factor (curriculum learning).
+
+        Parameters
+        ----------
+        scale : float
+            Multiplier in [0.0, 1.0] applied to every anomaly type's
+            ``prob_appear_per_step``.  A value of 0.3 means anomalies
+            spawn at 30% of their configured base rate.
+        """
+        self._spawn_scale = max(0.0, min(float(scale), 1.0))
+
+    def get_spawn_scale(self) -> float:
+        """Return the current spawn-probability scale factor."""
+        return self._spawn_scale
+
+    def set_phase(self, phase: int) -> None:
+        """
+        Convenience wrapper: set anomaly difficulty by curriculum phase.
+
+        Phase 1 → 30% of base spawn rates  (easy)
+        Phase 2 → 60% of base spawn rates  (medium)
+        Phase 3 → 100% of base spawn rates (full difficulty)
+        """
+        scale = self._PHASE_SCALE.get(phase, 1.0)
+        self.set_spawn_scale(scale)
 
     def _anomaly_types(self) -> Dict[str, AnomalyTypeConfig]:
         """Return all anomaly type configs as a dict."""
@@ -85,10 +126,15 @@ class AnomalyEngine:
         cfg: AnomalyTypeConfig,
     ):
         """Spawn / expire anomalies for one dict (edges or nodes)."""
+        # Apply curriculum scale to the spawn probability only —
+        # disappear probability stays unchanged so existing anomalies
+        # clear at the normal rate.
+        scaled_appear = cfg.prob_appear_per_step * self._spawn_scale
+
         for key, active_list in anomaly_dict.items():
             # --- Spawn new ---
             already_has = any(a.anomaly_type == atype for a in active_list)
-            if not already_has and self.rng.random() < cfg.prob_appear_per_step:
+            if not already_has and self.rng.random() < scaled_appear:
                 severity = self.rng.uniform(cfg.severity_min, cfg.severity_max)
                 active_list.append(ActiveAnomaly(
                     anomaly_type=atype,

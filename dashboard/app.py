@@ -108,11 +108,11 @@ def _load_agent(scenario_name: str = "india") -> Optional[ActorCritic]:
         agent.eval()
 
         _loaded_agent = agent
-        print(f"✅ Loaded trained agent from {model_path.name} (ep {checkpoint.get('episode', '?')})")
+        print(f"Loaded trained agent from {model_path.name} (ep {checkpoint.get('episode', '?')})")
         return agent
 
     except Exception as e:
-        print(f"⚠ Failed to load agent: {e}")
+        print(f"Failed to load agent: {e}")
         return None
 
 
