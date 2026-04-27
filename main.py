@@ -91,12 +91,19 @@ def run_eval(mode: str = "trained"):
 def run_dashboard():
     """Launch the FastAPI dashboard server."""
     import uvicorn
-    print("Starting dashboard at http://localhost:8000")
+    import os
+    
+    # Cloud Run provides the port via the PORT environment variable
+    port = int(os.environ.get("PORT", 8000))
+    # Disable reload in production to save resources
+    reload = "PORT" not in os.environ
+    
+    print(f"Starting dashboard on port {port} (reload={reload})")
     uvicorn.run(
         "dashboard.app:app",
         host="0.0.0.0",
-        port=8000,
-        reload=True,
+        port=port,
+        reload=reload,
     )
 
 
