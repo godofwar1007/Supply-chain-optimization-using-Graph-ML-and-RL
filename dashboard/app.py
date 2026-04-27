@@ -29,7 +29,7 @@ from pydantic import BaseModel
 # Project root
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from src.config.scenarios import india_scenario, small_scenario, volatile_scenario
+from src.config.scenarios import india_scenario, small_scenario, volatile_scenario, reroute_test_scenario
 from src.environment.supply_chain_env import SupplyChainEnv
 from src.features.feature_engine import FeatureEngine
 from src.models.ppo_agent import ActorCritic
@@ -47,6 +47,7 @@ SCENARIOS = {
     "india": india_scenario,
     "small": small_scenario,
     "volatile": volatile_scenario,
+    "reroute_test": reroute_test_scenario,
 }
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -206,8 +207,18 @@ def _build_network_json(config) -> dict:
 
 @app.get("/")
 async def root():
-    """Serve the main dashboard page."""
-    return FileResponse(str(STATIC_DIR / "index.html"))
+    """Serve the main dashboard page with dynamic API key injection."""
+    path = STATIC_DIR / "index.html"
+    if not path.exists():
+        return {"error": "index.html not found"}
+    
+    content = path.read_text()
+    # Inject API key from environment variable
+    api_key = os.getenv("GOOGLE_MAPS_API_KEY", "YOUR_API_KEY_MISSING")
+    content = content.replace("YOUR_API_KEY", api_key)
+    
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(content=content)
 
 
 @app.get("/api/network")
@@ -251,6 +262,28 @@ async def websocket_simulate(websocket: WebSocket):
         config = SCENARIOS.get(scenario_name, SCENARIOS["india"])()
         env = SupplyChainEnv(config, render_mode=None)
         obs, info = env.reset(seed=seed)
+
+        # ── REROUTE TEST: Manual Anomaly Injection ──────────────────────
+        # We inject severe anomalies on the nominal optimal path to force a reroute decision.
+        if scenario_name == "reroute_test":
+            try:
+                # Find nominal shortest path from current start to destination
+                nominal_path = nx.shortest_path(
+                    env.graph, env.current_node, env.destination, weight="base_time_hours"
+                )
+                # Inject a severe weather anomaly on the first edge of the optimal path
+                if len(nominal_path) > 1:
+                    u, v = nominal_path[0], nominal_path[1]
+                    env.anomaly_engine.force_anomaly((u, v), "weather", 25.0, 5.0, persistent=True)
+                    env.anomaly_engine.force_anomaly(v, "weather", 20.0, 4.0, persistent=True)
+                    print(f"DEBUG: Injected severe anomaly on {u} -> {v}")
+                    
+                    # Optional: second hurdle
+                    if len(nominal_path) > 2:
+                        u2, v2 = nominal_path[1], nominal_path[2]
+                        env.anomaly_engine.force_anomaly((u2, v2), "traffic", 15.0, 3.0, persistent=True)
+            except Exception as e:
+                print(f"Failed to inject reroute anomalies: {e}")
 
         # Load trained agent if requested
         agent = None

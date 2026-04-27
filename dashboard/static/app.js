@@ -1,12 +1,79 @@
 /* ═══════════════════════════════════════════════════════════════
-   SupplyChainAI Dashboard — Application Logic
+   SupplyChainAI Dashboard — Application Logic (Google Maps Version)
    Handles map rendering, WebSocket simulation, and UI updates
    ═══════════════════════════════════════════════════════════════ */
 
-(function () {
-    "use strict";
+"use strict";
 
-    // ── DOM References ──────────────────────────────────────────
+// ── Global Map References ─────────────────────────────────────
+let map;
+let infoWindow;
+let layers = {
+    edges: [],
+    optimalPath: [],
+    nodes: [],
+    activePath: [],
+    animation: []
+};
+
+let ws = null;
+let networkData = null;
+let markers = {};
+let edgeMarkers = {}; // keyed by "src___tgt"
+let cumulativeReward = 0;
+
+// ── High-Contrast Dark Theme Style ──────────────────────────
+const darkStyle = [
+    { elementType: "geometry", stylers: [{ color: "#1a1a1a" }] },
+    { elementType: "labels.icon", stylers: [{ visibility: "off" }] },
+    { elementType: "labels.text.fill", stylers: [{ color: "#616161" }] },
+    { elementType: "labels.text.stroke", stylers: [{ color: "#1a1a1a" }] },
+    { featureType: "administrative", elementType: "geometry", stylers: [{ color: "#444444" }] },
+    { featureType: "road", elementType: "geometry.fill", stylers: [{ color: "#222222" }] },
+    { featureType: "water", elementType: "geometry", stylers: [{ color: "#000000" }] }
+];
+
+// ── Color Palette ───────────────────────────────────────────
+const COLORS = {
+    network: "#555555",       // Brighter background network
+    optimal: "#00f2ff",       // Cyan for the "Best" path
+    active: "#bf00ff",        // Neon Purple for path travelled
+    anomaly: "#ff3f34",       // Bright Red for disruptions
+    source: "#ffd700",        // Gold
+    destination: "#00ff7f",   // Emerald Green
+    activeNode: "#ff9f1a",    // Orange for current location
+    metroNode: "#3498db",     // Blue for metro hubs
+    standardNode: "#444444"   // Gray for normal nodes
+};
+
+/**
+ * Global Callback for Google Maps API
+ */
+window.initMap = function () {
+    console.log("Initializing Google Maps...");
+    const mapElement = document.getElementById("map");
+    if (!mapElement) return;
+
+    map = new google.maps.Map(mapElement, {
+        center: { lat: 22.5, lng: 80 },
+        zoom: 5,
+        styles: darkStyle,
+        disableDefaultUI: false,
+        zoomControl: true,
+        mapTypeControl: false,
+        streetViewControl: false,
+        rotateControl: false,
+        fullscreenControl: true,
+        backgroundColor: "#1a1a1a"
+    });
+
+    infoWindow = new google.maps.InfoWindow();
+    document.dispatchEvent(new CustomEvent("mapReady"));
+};
+
+// ── UI Initialization ────────────────────────────────────────
+document.addEventListener("DOMContentLoaded", () => {
+    // DOM References
     const scenarioSelect   = document.getElementById("scenario-select");
     const agentSelect      = document.getElementById("agent-select");
     const agentStatus      = document.getElementById("agent-status");
@@ -26,7 +93,6 @@
     const deliveryOverlay  = document.getElementById("delivery-overlay");
     const deliveryContent  = document.getElementById("delivery-content");
 
-    // Metric value elements
     const valSteps   = document.getElementById("val-steps");
     const valTime    = document.getElementById("val-time");
     const valCost    = document.getElementById("val-cost");
@@ -35,158 +101,74 @@
     const valShelf   = document.getElementById("val-shelf");
     const shelfBar   = document.getElementById("shelf-bar");
 
-    // ── Map Setup ───────────────────────────────────────────────
-    const map = L.map("map", {
-        center: [22.5, 80],
-        zoom: 5,
-        zoomControl: true,
-        attributionControl: true,
+    // ── Map Loading ─────────────────────────────────────────────
+    document.addEventListener("mapReady", () => {
+        loadNetwork(scenarioSelect.value);
+        checkModelStatus();
     });
 
-    // Dark-themed tile layer
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-        attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
-        subdomains: "abcd",
-        maxZoom: 18,
-    }).addTo(map);
-
-    // Map layer groups
-    const edgeLayer         = L.layerGroup().addTo(map);
-    const optimalPathLayer  = L.layerGroup().addTo(map);
-    const nodeLayer         = L.layerGroup().addTo(map);
-    const activePathLayer   = L.layerGroup().addTo(map);
-    const animationLayer    = L.layerGroup().addTo(map);
-
-    // State
-    let ws = null;
-    let networkData = null;
-    let markers = {};
-    let edgeMarkers = {}; // keyed by "src___tgt"
-    let cumulativeReward = 0;
-
-    // ── Speed Slider ────────────────────────────────────────────
-    speedSlider.addEventListener("input", () => {
-        const val = parseInt(speedSlider.value);
-        speedLabel.textContent = (val / 1000).toFixed(1) + "s";
-    });
-
-    // ── Load Initial Network ────────────────────────────────────
     async function loadNetwork(scenario) {
-        const resp = await fetch(`/api/network?scenario=${scenario}`);
-        networkData = await resp.json();
-        renderNetwork(networkData);
+        if (!map) return;
+        try {
+            const resp = await fetch(`/api/network?scenario=${scenario}`);
+            networkData = await resp.json();
+            renderNetwork(networkData);
+        } catch (e) { console.error("Failed to load network:", e); }
     }
 
     function renderNetwork(data) {
-        edgeLayer.clearLayers();
-        optimalPathLayer.clearLayers();
-        nodeLayer.clearLayers();
-        activePathLayer.clearLayers();
-        animationLayer.clearLayers();
+        Object.keys(layers).forEach(k => clearLayer(k));
         markers = {};
         edgeMarkers = {};
 
-        // Draw edges first (behind nodes)
-        for (const edge of data.edges) {
-            const latlngs = [
-                [edge.source_lat, edge.source_lng],
-                [edge.target_lat, edge.target_lng],
-            ];
-
-            const terrainColors = {
-                flat: "hsla(200, 60%, 45%, 0.25)",
-                hilly: "hsla(30, 60%, 45%, 0.25)",
-                mountainous: "hsla(0, 50%, 50%, 0.25)",
-                coastal: "hsla(180, 60%, 45%, 0.25)",
-            };
-
-            const baseColor = terrainColors[edge.terrain] || "hsla(200, 60%, 45%, 0.2)";
-
-            const line = L.polyline(latlngs, {
-                color: baseColor,
-                weight: 1.5,
-                opacity: 0.6,
-                dashArray: "4 6",
+        data.edges.forEach(edge => {
+            const polyline = new google.maps.Polyline({
+                path: [{ lat: edge.source_lat, lng: edge.source_lng }, { lat: edge.target_lat, lng: edge.target_lng }],
+                geodesic: true,
+                strokeColor: COLORS.network,
+                strokeOpacity: 0.4,
+                strokeWeight: 2.0,
+                map: map
             });
 
-            line.bindPopup(`
-                <div class="popup-title">${edge.source} → ${edge.target}</div>
-                <div class="popup-detail">
-                    Distance: ${edge.distance_km.toFixed(0)} km<br>
-                    Terrain: ${edge.terrain}<br>
-                    Road Grade: ${(edge.road_grading * 100).toFixed(0)}%<br>
-                    Toll: ₹${edge.toll_cost}
-                </div>
-            `);
+            layers.edges.push(polyline);
+            edgeMarkers[`${edge.source}___${edge.target}`] = { line: polyline, baseColor: COLORS.network };
+        });
 
-            edgeLayer.addLayer(line);
-            edgeMarkers[`${edge.source}___${edge.target}`] = {
-                line: line,
-                baseColor: baseColor,
-                latlngs: latlngs
-            };
-        }
-
-        // Draw nodes
-        const seenNodes = new Set();
-        for (const node of data.nodes) {
-            if (seenNodes.has(node.id)) continue;
-            seenNodes.add(node.id);
-
+        data.nodes.forEach(node => {
             const isMetro = node.region_type === "metro";
-            const size = isMetro ? 16 : 12;
-
-            const icon = L.divIcon({
-                className: "",
-                html: `<div class="city-marker ${isMetro ? "metro" : ""}" id="marker-${node.id}"></div>`,
-                iconSize: [size, size],
-                iconAnchor: [size / 2, size / 2],
+            const marker = new google.maps.Marker({
+                position: { lat: node.lat, lng: node.lng },
+                map: map,
+                title: node.id,
+                icon: {
+                    path: google.maps.SymbolPath.CIRCLE,
+                    scale: isMetro ? 5 : 3,
+                    fillColor: isMetro ? COLORS.metroNode : COLORS.standardNode,
+                    fillOpacity: 0.5,
+                    strokeWeight: 1,
+                    strokeColor: "#333333",
+                }
             });
 
-            const marker = L.marker([node.lat, node.lng], { icon })
-                .bindPopup(`
-                    <div class="popup-title">${node.id}</div>
-                    <div class="popup-detail">
-                        Type: ${node.region_type}<br>
-                        Warehouse: ${node.has_warehouse ? "Yes" : "No"}
-                        ${node.has_warehouse ? `<br>Capacity: ${node.warehouse_capacity}<br>Fill: ${(node.fill_ratio * 100).toFixed(0)}%` : ""}
-                        ${node.has_cold_storage ? "<br>❄ Cold Storage" : ""}
-                    </div>
-                `)
-                .addTo(nodeLayer);
-
-            // Add label (tooltip)
-            marker.bindTooltip(node.id, {
-                permanent: true,
-                direction: "top",
-                offset: [0, -10],
-                className: "city-label",
-            });
-
-            markers[node.id] = {
-                marker: marker,
-                lat: node.lat,
-                lng: node.lng
-            };
-        }
+            layers.nodes.push(marker);
+            markers[node.id] = { marker, lat: node.lat, lng: node.lng, type: node.region_type };
+        });
     }
 
-    // ── Simulation ──────────────────────────────────────────────
-    btnSimulate.addEventListener("click", startSimulation);
-    btnStop.addEventListener("click", stopSimulation);
+    function clearLayer(name) {
+        layers[name].forEach(obj => obj.setMap(null));
+        layers[name] = [];
+    }
 
-    function startSimulation() {
-        // Close existing connection
+    // ── Simulation Logic ────────────────────────────────────────
+    btnSimulate.addEventListener("click", () => {
         if (ws) ws.close();
-
-        // Reset UI
         resetUI();
         setStatus("running", "Simulating...");
         btnSimulate.disabled = true;
         btnStop.disabled = false;
-        cumulativeReward = 0;
 
-        // Open WebSocket
         const protocol = location.protocol === "https:" ? "wss:" : "ws:";
         ws = new WebSocket(`${protocol}//${location.host}/ws/simulate`);
 
@@ -201,439 +183,299 @@
 
         ws.onmessage = (event) => {
             const data = JSON.parse(event.data);
-            handleMessage(data);
+            if (data.type === "init") handleInit(data);
+            else if (data.type === "step") handleStep(data);
+            else if (data.type === "done") handleDone(data);
         };
 
         ws.onclose = () => {
             btnSimulate.disabled = false;
             btnStop.disabled = true;
-            if (statusText.textContent === "Simulating...") {
-                setStatus("ready", "Ready");
-            }
+            if (statusText.textContent === "Simulating...") setStatus("ready", "Ready");
         };
+    });
 
-        ws.onerror = (err) => {
-            console.error("WebSocket error:", err);
-            setStatus("error", "Connection Error");
-        };
-    }
-
-    function stopSimulation() {
-        if (ws) {
-            ws.close();
-            ws = null;
-        }
+    btnStop.addEventListener("click", () => {
+        if (ws) ws.close();
         setStatus("ready", "Stopped");
-        btnSimulate.disabled = false;
-        btnStop.disabled = true;
-    }
+    });
 
-    function handleMessage(data) {
-        switch (data.type) {
-            case "init":
-                handleInit(data);
-                break;
-            case "step":
-                handleStep(data);
-                break;
-            case "done":
-                handleDone(data);
-                break;
-        }
-    }
-
-    // ── Init Handler ────────────────────────────────────────────
     function handleInit(data) {
-        // Render the network if provided
-        if (data.network) {
-            renderNetwork(data.network);
-        }
-
-        // Show cards
+        if (data.network) renderNetwork(data.network);
         shipmentCard.style.display = "block";
         metricsCard.style.display = "block";
         anomaliesCard.style.display = "block";
 
         const s = data.shipment;
-        const agentMode = data.agent_mode || "random";
-        const agentLabel = agentMode === "trained"
-            ? '<span class="agent-badge trained">🧠 GNN+RL</span>'
-            : '<span class="agent-badge random">🎲 Random</span>';
+        const agentLabel = data.agent_mode === "trained" ? "🧠 GNN+RL" : "🎲 Random";
+        
+        // Detailed shipment info grid
         shipmentInfo.innerHTML = `
-            <div class="info-item full-width">
-                <span class="info-label">Agent</span>
-                ${agentLabel}
-            </div>
             <div class="info-item">
                 <span class="info-label">Product</span>
                 <span class="info-value">${s.product_type}</span>
             </div>
             <div class="info-item">
-                <span class="info-label">Weight</span>
-                <span class="info-value">${s.weight_kg} kg</span>
+                <span class="info-label">Priority</span>
+                <span class="info-value">${s.priority}</span>
             </div>
             <div class="info-item">
-                <span class="info-label">Priority</span>
-                <span class="info-value" style="color: ${priorityColor(s.priority)}">${s.priority.toUpperCase()}</span>
+                <span class="info-label">Weight</span>
+                <span class="info-value">${s.weight_kg.toLocaleString()} kg</span>
             </div>
             <div class="info-item">
                 <span class="info-label">Shelf Life</span>
                 <span class="info-value">${s.shelf_life_hours}h</span>
             </div>
-            <div class="info-item full-width">
-                <span class="info-label">Route</span>
+            <div class="info-item full-width" style="margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border);">
+                <span class="info-label">Origin → Destination</span>
                 <span class="info-value">${data.source} → ${data.destination}</span>
+            </div>
+            <div class="info-item full-width">
+                <span class="info-label">Navigation Agent</span>
+                <span class="agent-badge ${data.agent_mode}">${agentLabel}</span>
             </div>
         `;
 
-        // Highlight source and destination on the map
         highlightNode(data.source, "source");
         highlightNode(data.destination, "destination");
+        if (data.nominal_path) drawOptimalPath(data.nominal_path, true);
+    }
 
-        // Draw initial optimal path
-        if (data.nominal_path) {
-            drawOptimalPath(data.nominal_path, true);
+    function handleStep(data) {
+        cumulativeReward += data.reward;
+        
+        // Update Live Metrics
+        valSteps.textContent = data.step;
+        valTime.textContent = data.total_time.toFixed(1) + "h";
+        valCost.textContent = "₹" + Math.round(data.total_cost).toLocaleString("en-IN");
+        valRisk.textContent = data.total_risk.toFixed(3);
+        valReward.textContent = cumulativeReward.toFixed(1);
+        valReward.style.color = cumulativeReward >= 0 ? "var(--green)" : "var(--red)";
+
+        // Update Shelf Life Bar
+        const shelfPct = data.shelf_remaining_pct;
+        valShelf.textContent = `${shelfPct}% Remaining`;
+        shelfBar.style.width = `${shelfPct}%`;
+        
+        // Dynamic bar color based on remaining life
+        shelfBar.classList.remove("warning", "danger");
+        if (shelfPct < 25) shelfBar.classList.add("danger");
+        else if (shelfPct < 50) shelfBar.classList.add("warning");
+
+        // Update Global Anomalies List
+        if (data.global_anomalies) {
+            updateGlobalAnomaliesList(data.global_anomalies);
+            updateMapAnomalies(data.global_anomalies);
+        }
+
+        if (data.optimal_path) drawOptimalPath(data.optimal_path, false);
+        
+        drawPathSegment(data);
+        highlightNode(data.to, "active");
+        addLogEntry(data);
+    }
+
+    function updateGlobalAnomaliesList(anoms) {
+        anomaliesList.innerHTML = "";
+        let count = 0;
+
+        // Process edges
+        if (anoms.edges) {
+            Object.keys(anoms.edges).forEach(key => {
+                const edgeAnoms = anoms.edges[key];
+                const [src, tgt] = key.split("___");
+                edgeAnoms.forEach(a => {
+                    count++;
+                    const item = document.createElement("div");
+                    item.className = `anomaly-item ${a.type}`;
+                    item.innerHTML = `
+                        <div class="anomaly-item-header">
+                            <span>${a.type.toUpperCase()}</span>
+                            <span>${a.severity}x</span>
+                        </div>
+                        <div class="anomaly-item-target">${src} → ${tgt}</div>
+                    `;
+                    anomaliesList.appendChild(item);
+                });
+            });
+        }
+
+        // Process nodes
+        if (anoms.nodes) {
+            Object.keys(anoms.nodes).forEach(nodeId => {
+                const nodeAnoms = anoms.nodes[nodeId];
+                nodeAnoms.forEach(a => {
+                    count++;
+                    const item = document.createElement("div");
+                    item.className = `anomaly-item ${a.type}`;
+                    item.innerHTML = `
+                        <div class="anomaly-item-header">
+                            <span>${a.type.toUpperCase()}</span>
+                            <span>${a.severity}x</span>
+                        </div>
+                        <div class="anomaly-item-target">City: ${nodeId}</div>
+                    `;
+                    anomaliesList.appendChild(item);
+                });
+            });
+        }
+
+        if (count === 0) {
+            anomaliesList.innerHTML = '<div class="log-placeholder">No active disruptions.</div>';
         }
     }
 
-    // ── Step Handler ────────────────────────────────────────────
-    function handleStep(data) {
-        cumulativeReward += data.reward;
+    function handleDone(data) {
+        setStatus("ready", data.delivered ? "Delivered!" : "Failed");
+        deliveryOverlay.style.display = "flex";
+        deliveryContent.innerHTML = `
+            <div class="overlay-icon">${data.delivered ? "✅" : "❌"}</div>
+            <h3>${data.delivered ? "Successfully Delivered!" : "Shipment Failed"}</h3>
+            <div class="overlay-stats">
+                <p>Path: ${data.path.join(" → ")}</p>
+                <p>Steps: ${data.total_steps} | Time: ${data.total_time_hours}h</p>
+                <p>Cost: ₹${data.total_cost.toLocaleString("en-IN")}</p>
+            </div>
+        `;
+        deliveryContent.parentElement.className = `overlay ${data.delivered ? "success" : "failure"}`;
+    }
 
-        // Update metrics
-        valSteps.textContent = data.step;
-        valTime.textContent = data.total_time.toFixed(1) + "h";
-        valCost.textContent = "₹" + formatNumber(data.total_cost);
-        valRisk.textContent = data.total_risk.toFixed(3);
-        valReward.textContent = cumulativeReward.toFixed(1);
-        valReward.style.color = cumulativeReward >= 0
-            ? "hsl(145, 70%, 50%)"
-            : "hsl(0, 75%, 60%)";
+    // ── Helper Functions ────────────────────────────────────────
+    function highlightNode(id, type) {
+        const mObj = markers[id];
+        if (!mObj) return;
+        const icon = mObj.marker.getIcon();
+        if (type === "source") { icon.fillColor = COLORS.source; icon.scale = 10; icon.fillOpacity = 1.0; }
+        else if (type === "destination") { icon.fillColor = COLORS.destination; icon.scale = 10; icon.fillOpacity = 1.0; }
+        else if (type === "active") { icon.fillColor = COLORS.activeNode; icon.scale = 8; icon.fillOpacity = 1.0; }
+        mObj.marker.setIcon(icon);
+        mObj.marker.setZIndex(1000);
+    }
 
-        // Shelf life bar
-        if (data.shelf_remaining_pct !== undefined) {
-            const pct = data.shelf_remaining_pct;
-            valShelf.textContent = pct.toFixed(1) + "%";
-            shelfBar.style.width = pct + "%";
-            shelfBar.className = "progress-bar" +
-                (pct < 20 ? " danger" : pct < 50 ? " warning" : "");
-        }
+    function drawPathSegment(data) {
+        const poly = new google.maps.Polyline({
+            path: [{ lat: data.from_lat, lng: data.from_lng }, { lat: data.to_lat, lng: data.to_lng }],
+            strokeColor: COLORS.active, strokeOpacity: 1.0, strokeWeight: 6, map: map
+        });
+        layers.activePath.push(poly);
+        animateMarkerAlongPath(data.from_lat, data.from_lng, data.to_lat, data.to_lng, data.vehicle_type);
+    }
 
-        // Handle anomalies
-        if (data.global_anomalies) {
-            updateMapAnomalies(data.global_anomalies);
-            updateAnomaliesUI(data.global_anomalies);
-        }
+    function animateMarkerAlongPath(flat, flng, tlat, tlng, vehicleType) {
+        const icons = { truck: "🚛", rail: "🚂", air: "✈️", ship: "🚢" };
+        const marker = new google.maps.Marker({
+            position: { lat: flat, lng: flng },
+            map: map,
+            icon: { path: google.maps.SymbolPath.CIRCLE, scale: 0 },
+            label: { text: icons[vehicleType] || "📦", fontSize: "28px" }
+        });
+        layers.animation.push(marker);
 
-        // Update current optimal path
-        if (data.optimal_path) {
-            drawOptimalPath(data.optimal_path, false);
-        }
-
-        // Draw active path segment
-        drawPathSegment(data);
-
-        // Highlight active node
-        highlightNode(data.to, "active");
-
-        // Add log entry
-        addLogEntry(data);
+        let count = 0;
+        const numSteps = 40;
+        const interval = setInterval(() => {
+            count++;
+            const fraction = count / numSteps;
+            marker.setPosition({ lat: flat + (tlat - flat) * fraction, lng: flng + (tlng - flng) * fraction });
+            if (count >= numSteps) { clearInterval(interval); setTimeout(() => marker.setMap(null), 500); }
+        }, 20);
     }
 
     function drawOptimalPath(path, isInitial) {
         if (!path || path.length < 2) return;
+        if (!isInitial) layers.optimalPath = layers.optimalPath.filter(l => { if (l.isDyn) { l.setMap(null); return false; } return true; });
         
-        // Clear previous dynamic optimal path
-        if (!isInitial) {
-            // We want to clear only the dynamic one. Let's tag them.
-            optimalPathLayer.eachLayer(layer => {
-                if (layer.options.isDynamic) optimalPathLayer.removeLayer(layer);
+        const poly = new google.maps.Polyline({
+            path: path.map(id => ({ lat: markers[id].lat, lng: markers[id].lng })),
+            strokeColor: COLORS.optimal, 
+            strokeOpacity: 0.8, 
+            strokeWeight: isInitial ? 3 : 5,
+            zIndex: 500,
+            icons: [{
+                icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 2 },
+                offset: '0',
+                repeat: '10px'
+            }],
+            map: map
+        });
+        poly.isDyn = !isInitial;
+        layers.optimalPath.push(poly);
+    }
+
+    function updateMapAnomalies(anoms) {
+        // Reset all edges to base
+        Object.keys(edgeMarkers).forEach(k => {
+            edgeMarkers[k].line.setOptions({ strokeColor: COLORS.network, strokeOpacity: 0.1, strokeWeight: 1.0 });
+        });
+        // Reset all nodes to base
+        layers.nodes.forEach(m => { 
+            const icon = m.getIcon(); 
+            const locData = markers[m.title];
+            icon.fillColor = locData.type === "metro" ? COLORS.metroNode : COLORS.standardNode; 
+            icon.fillOpacity = 0.5;
+            icon.scale = locData.type === "metro" ? 5 : 3;
+            m.setIcon(icon); 
+        });
+
+        // Highlight affected edges (Subtle Glow)
+        if (anoms.edges) {
+            Object.keys(anoms.edges).forEach(key => {
+                if (edgeMarkers[key]) {
+                    edgeMarkers[key].line.setOptions({ strokeColor: COLORS.anomaly, strokeOpacity: 0.6, strokeWeight: 3 });
+                }
             });
         }
-
-        const latlngs = path.map(nodeId => [markers[nodeId].lat, markers[nodeId].lng]);
-        
-        const style = isInitial ? {
-            color: "hsl(145, 70%, 50%)",
-            weight: 2,
-            opacity: 0.3,
-            dashArray: "10, 10",
-            interactive: false
-        } : {
-            color: "hsl(200, 90%, 55%)",
-            weight: 3,
-            opacity: 0.5,
-            dashArray: "5, 5",
-            interactive: false,
-            isDynamic: true
-        };
-
-        const line = L.polyline(latlngs, style);
-        optimalPathLayer.addLayer(line);
-    }
-
-    function updateMapAnomalies(globalAnomalies) {
-        // Reset all edges to base style
-        for (const key in edgeMarkers) {
-            const m = edgeMarkers[key];
-            m.line.setStyle({ color: m.baseColor, weight: 1.5, dashArray: "4 6", opacity: 0.6 });
-        }
-
-        // Reset all node anomaly highlights (but preserve source/dest/active)
-        document.querySelectorAll(".city-marker.anomaly").forEach(m => m.classList.remove("anomaly"));
-
-        // Highlight edges with anomalies - use a subtler highlight so it doesn't look like everything is red
-        if (globalAnomalies.edges) {
-            for (const key in globalAnomalies.edges) {
-                const marker = edgeMarkers[key];
-                if (marker) {
-                    marker.line.setStyle({
-                        color: "hsl(0, 75%, 60%)",
-                        weight: 2.5,
-                        dashArray: "2, 4", // Dashed to distinguish from paths
-                        opacity: 0.8
-                    });
+        // Highlight affected nodes
+        if (anoms.nodes) {
+            Object.keys(anoms.nodes).forEach(id => {
+                if (markers[id]) {
+                    const icon = markers[id].marker.getIcon();
+                    icon.fillColor = COLORS.anomaly;
+                    icon.fillOpacity = 0.9;
+                    icon.scale = 7;
+                    markers[id].marker.setIcon(icon);
                 }
-            }
-        }
-
-        // Highlight nodes with anomalies
-        if (globalAnomalies.nodes) {
-            for (const node in globalAnomalies.nodes) {
-                const el = document.getElementById(`marker-${node}`);
-                if (el) el.classList.add("anomaly");
-            }
+            });
         }
     }
 
-    function updateAnomaliesUI(globalAnomalies) {
-        anomaliesList.innerHTML = "";
-        
-        const edgeAnoms = globalAnomalies.edges || {};
-        const nodeAnoms = globalAnomalies.nodes || {};
-        
-        const all = [];
-        for (const key in edgeAnoms) {
-            const [src, tgt] = key.split("___");
-            edgeAnoms[key].forEach(a => all.push({ ...a, target: `${src} → ${tgt}`, targetType: "edge" }));
-        }
-        for (const node in nodeAnoms) {
-            nodeAnoms[node].forEach(a => all.push({ ...a, target: node, targetType: "node" }));
-        }
-
-        if (all.length === 0) {
-            anomaliesList.innerHTML = '<div class="log-placeholder">No active disruptions.</div>';
-            return;
-        }
-
-        // Sort by severity
-        all.sort((a, b) => b.severity - a.severity);
-
-        all.forEach(a => {
-            const item = document.createElement("div");
-            item.className = `anomaly-item ${a.type}`;
-            item.innerHTML = `
-                <div class="anomaly-item-header">
-                    <span>${a.type.toUpperCase()}</span>
-                    <span>${a.severity}x</span>
-                </div>
-                <div class="anomaly-item-target">${a.target}</div>
-            `;
-            anomaliesList.appendChild(item);
-        });
-    }
-
-    // ── Done Handler ────────────────────────────────────────────
-    function handleDone(data) {
-        setStatus("ready", data.delivered ? "Delivered!" : "Failed");
-
-        deliveryOverlay.style.display = "flex";
-        if (data.delivered) {
-            deliveryContent.className = "overlay-content success";
-            deliveryContent.innerHTML = `
-                <span class="overlay-icon">✅</span>
-                <h3>Shipment Delivered!</h3>
-                <div class="overlay-stats">
-                    Path: ${data.path.join(" → ")}<br>
-                    Hops: ${data.total_steps}<br>
-                    Time: ${data.total_time_hours}h<br>
-                    Cost: ₹${formatNumber(data.total_cost)}<br>
-                    Risk: ${data.total_risk.toFixed(3)}
-                </div>
-            `;
-        } else {
-            deliveryContent.className = "overlay-content failure";
-            deliveryContent.innerHTML = `
-                <span class="overlay-icon">❌</span>
-                <h3>Delivery Failed</h3>
-                <div class="overlay-stats">
-                    Reached: ${data.path[data.path.length - 1]}<br>
-                    Steps: ${data.total_steps}<br>
-                    Time: ${data.total_time_hours}h<br>
-                    Cost: ₹${formatNumber(data.total_cost)}
-                </div>
-            `;
-        }
-
-        // Auto-hide overlay after 5 seconds
-        setTimeout(() => {
-            deliveryOverlay.style.display = "none";
-        }, 5000);
-    }
-
-    // ── Map Helpers ─────────────────────────────────────────────
-    function highlightNode(nodeId, type) {
-        const mObj = markers[nodeId];
-        if (!mObj) return;
-
-        const el = document.getElementById(`marker-${nodeId}`);
-        if (el) {
-            // Remove previous active class from all markers
-            if (type === "active") {
-                document.querySelectorAll(".city-marker.active").forEach(m =>
-                    m.classList.remove("active")
-                );
-            }
-            el.classList.add(type);
-        }
-    }
-
-    function drawPathSegment(data) {
-        const latlngs = [
-            [data.from_lat, data.from_lng],
-            [data.to_lat, data.to_lng],
-        ];
-
-        const vehicleColors = {
-            truck: "hsl(200, 90%, 60%)",
-            rail: "hsl(145, 70%, 55%)",
-            air: "hsl(260, 70%, 65%)",
-            ship: "hsl(180, 70%, 55%)",
-        };
-
-        const color = vehicleColors[data.vehicle_type] || "hsl(200, 90%, 60%)";
-
-        // Glowing animated line
-        const bgLine = L.polyline(latlngs, {
-            color: color,
-            weight: 6,
-            opacity: 0.2,
-        });
-        activePathLayer.addLayer(bgLine);
-
-        const mainLine = L.polyline(latlngs, {
-            color: color,
-            weight: 3,
-            opacity: 0.9,
-        });
-        activePathLayer.addLayer(mainLine);
-
-        // Animate a dot moving along the path
-        animateMarkerAlongPath(latlngs, color, data.vehicle_type);
-    }
-
-    function animateMarkerAlongPath(latlngs, color, vehicleType) {
-        const vehicleIcons = { truck: "🚛", rail: "🚂", air: "✈️", ship: "🚢" };
-        const icon = vehicleIcons[vehicleType] || "📦";
-
-        const start = latlngs[0];
-        const end = latlngs[1];
-        const steps = 30;
-        let step = 0;
-
-        const dot = L.marker(start, {
-            icon: L.divIcon({
-                className: "",
-                html: `<div style="font-size: 20px; filter: drop-shadow(0 0 6px ${color});">${icon}</div>`,
-                iconSize: [24, 24],
-                iconAnchor: [12, 12],
-            }),
-        }).addTo(animationLayer);
-
-        const interval = setInterval(() => {
-            step++;
-            const t = step / steps;
-            const lat = start[0] + (end[0] - start[0]) * t;
-            const lng = start[1] + (end[1] - start[1]) * t;
-            dot.setLatLng([lat, lng]);
-
-            if (step >= steps) {
-                clearInterval(interval);
-                setTimeout(() => animationLayer.removeLayer(dot), 200);
-            }
-        }, 25);
-    }
-
-    // ── Log Helpers ─────────────────────────────────────────────
     function addLogEntry(data) {
         // Remove placeholder if it exists
         const placeholder = stepLog.querySelector(".log-placeholder");
         if (placeholder) placeholder.remove();
 
-        let anomalyHtml = "";
-        if (data.anomalies && data.anomalies.length > 0) {
-            anomalyHtml = `
-                <div class="log-anomalies">
-                    ${data.anomalies.map(a => `
-                        <span class="anomaly-tag ${a.type}">${a.type} ${a.severity}×</span>
-                    `).join("")}
-                </div>
-            `;
-        }
-
         const entry = document.createElement("div");
-        entry.className = `log-entry${data.delivered ? " delivered" : ""}`;
+        entry.className = "log-entry";
+        if (data.delivered) entry.classList.add("delivered");
+
+        const anomaliesHtml = data.anomalies.map(a => 
+            `<span class="anomaly-tag ${a.type}">${a.type}: ${a.severity}x</span>`
+        ).join("");
+
         entry.innerHTML = `
             <div class="log-entry-header">
-                <span class="log-step-num">Step ${data.step}</span>
-                <span class="log-vehicle">${vehicleIcon(data.vehicle_type)} ${data.vehicle_type}</span>
+                <span class="log-step-num">STEP ${data.step}</span>
+                <span class="log-vehicle">${data.vehicle_type}</span>
             </div>
             <div class="log-route">${data.from} → ${data.to}</div>
             <div class="log-details">
                 <span>⏱ ${data.time_hours}h</span>
-                <span>₹${formatNumber(data.cost)}</span>
+                <span>💰 ₹${Math.round(data.cost).toLocaleString("en-IN")}</span>
                 <span>⚠ ${data.risk.toFixed(3)}</span>
             </div>
-            ${anomalyHtml}
+            ${anomaliesHtml ? `<div class="log-anomalies">${anomaliesHtml}</div>` : ""}
         `;
-
+        
         stepLog.appendChild(entry);
         stepLog.scrollTop = stepLog.scrollHeight;
     }
 
-    // ── UI Helpers ──────────────────────────────────────────────
     function resetUI() {
         deliveryOverlay.style.display = "none";
-        activePathLayer.clearLayers();
-        optimalPathLayer.clearLayers();
-        animationLayer.clearLayers();
+        ["activePath", "optimalPath", "animation"].forEach(k => clearLayer(k));
         cumulativeReward = 0;
-
-        // Remove highlighting from markers
-        document.querySelectorAll(".city-marker").forEach(m => {
-            m.classList.remove("active", "source", "destination", "anomaly");
-        });
-
-        // Reset edge styles
-        for (const key in edgeMarkers) {
-            const m = edgeMarkers[key];
-            m.line.setStyle({ color: m.baseColor, weight: 1.5, dashArray: "4 6", opacity: 0.6 });
-        }
-
-        // Reset metrics
-        valSteps.textContent = "—";
-        valTime.textContent = "—";
-        valCost.textContent = "—";
-        valRisk.textContent = "—";
-        valReward.textContent = "—";
-        valReward.style.color = "";
-        valShelf.textContent = "—";
-        shelfBar.style.width = "100%";
-        shelfBar.className = "progress-bar";
-
-        // Clear log and anomalies
         stepLog.innerHTML = "";
-        anomaliesList.innerHTML = '<div class="log-placeholder">No active disruptions.</div>';
     }
 
     function setStatus(type, text) {
@@ -641,55 +483,15 @@
         statusBadge.className = `status-badge ${type === "running" ? "running" : ""}`;
     }
 
-    function formatNumber(num) {
-        return Math.round(num).toLocaleString("en-IN");
-    }
-
-    function priorityColor(priority) {
-        const colors = {
-            low: "hsl(215, 15%, 60%)",
-            medium: "hsl(50, 90%, 55%)",
-            high: "hsl(30, 90%, 55%)",
-            critical: "hsl(0, 75%, 60%)",
-        };
-        return colors[priority] || "hsl(215, 15%, 60%)";
-    }
-
-    function vehicleIcon(type) {
-        const icons = { truck: "🚛", rail: "🚂", air: "✈️", ship: "🚢" };
-        return icons[type] || "📦";
-    }
-
-    // ── Init ────────────────────────────────────────────────────
-    // Load India network on startup
-    loadNetwork("india");
-
-    // Check if a trained model is available
     async function checkModelStatus() {
         try {
             const resp = await fetch("/api/model-status");
-            const data = await resp.json();
-            if (data.available) {
-                agentStatus.textContent = `✅ ${data.model} (ep ${data.episode})`;
-                agentStatus.style.color = "hsl(145, 70%, 50%)";
-            } else {
-                agentStatus.textContent = "⚠ No model found";
-                agentStatus.style.color = "hsl(30, 90%, 55%)";
-            }
-        } catch (e) {
-            agentStatus.textContent = "";
-        }
+            const d = await resp.json();
+            agentStatus.textContent = d.available ? `✅ ${d.model}` : "⚠ No model";
+        } catch (e) {}
     }
-    checkModelStatus();
 
-    // Reload network when scenario changes
-    scenarioSelect.addEventListener("change", () => {
-        loadNetwork(scenarioSelect.value);
-    });
-
-    // Click overlay to dismiss
-    deliveryOverlay.addEventListener("click", () => {
-        deliveryOverlay.style.display = "none";
-    });
-
-})();
+    scenarioSelect.addEventListener("change", () => loadNetwork(scenarioSelect.value));
+    speedSlider.addEventListener("input", () => speedLabel.textContent = (parseInt(speedSlider.value) / 1000).toFixed(1) + "s");
+    deliveryOverlay.addEventListener("click", () => deliveryOverlay.style.display = "none");
+});

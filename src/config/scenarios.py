@@ -313,9 +313,9 @@ def india_scenario() -> ScenarioConfig:
     # ── Shipment templates ─────────────────────────────────────────────
     templates = [
         ShipmentTemplate("electronics",   0.8, 720,  0.3, 400,  1.5, "high",     80000),
-        ShipmentTemplate("pharmaceuticals",0.9, 240,  0.9, 200,  0.5, "critical", 200000),
+        ShipmentTemplate("pharmaceuticals",0.9, 480,  0.9, 200,  0.5, "critical", 200000),
         ShipmentTemplate("textiles",      0.2, 2160, 0.1, 1000, 5.0, "low",      20000),
-        ShipmentTemplate("perishables",   0.6, 120,   1.0, 800,  3.0, "high",     40000),
+        ShipmentTemplate("perishables",   0.6, 240,   1.0, 800,  3.0, "high",     40000),
         ShipmentTemplate("machinery",     0.4, 4320, 0.1, 5000, 10.0,"medium",   150000),
         ShipmentTemplate("fmcg",          0.3, 360,  0.2, 600,  2.5, "medium",   15000),
     ]
@@ -370,4 +370,26 @@ def volatile_scenario() -> ScenarioConfig:
 
     india.name = "india_volatile"
     india.auto_compute_times()
+    return india
+
+# ═══════════════════════════════════════════════════════════════════════
+# Reroute Test Scenario (Controlled Anomalies)
+# ═══════════════════════════════════════════════════════════════════════
+
+def reroute_test_scenario() -> ScenarioConfig:
+    """
+    Scenario for testing rerouting logic.
+    Uses the India map but disables ALL stochastic anomalies.
+    The dashboard will manually inject anomalies on the optimal path.
+    """
+    india = india_scenario()
+    
+    # Disable all stochastic anomalies by setting spawn probs to 0
+    # This keeps the schema identical for the trained agent
+    india.anomaly_config.weather.prob_appear_per_step = 0.0
+    india.anomaly_config.traffic.prob_appear_per_step = 0.0
+    india.anomaly_config.sentiment.prob_appear_per_step = 0.0
+    india.anomaly_config.geopolitical.prob_appear_per_step = 0.0
+    
+    india.name = "reroute_test"
     return india

@@ -486,24 +486,43 @@ input[type="range"]::-webkit-slider-thumb {
     background: var(--bg-primary);
 }
 
-/* Override Leaflet tiles for dark theme */
-.leaflet-tile-pane {
-    filter: brightness(0.85) contrast(1.1) saturate(0.85);
-}
-
-.leaflet-control-zoom a {
+/* ── Google Maps Customizations ────────────────────────────── */
+.gm-style-iw {
     background: var(--bg-card) !important;
-    color: var(--text-primary) !important;
-    border-color: var(--border) !important;
+    backdrop-filter: blur(var(--blur)) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius) !important;
+    padding: 0 !important;
 }
 
-.leaflet-control-attribution {
-    background: hsla(220, 20%, 8%, 0.8) !important;
-    color: var(--text-muted) !important;
-    font-size: 10px !important;
+.gm-style-iw-d {
+    overflow: hidden !important;
+    background: transparent !important;
 }
 
-/* ── Delivery Overlay ────────────────────────────────────────── */
+.gm-style-iw-tc::after {
+    background: var(--bg-card) !important;
+}
+
+.gm-popup {
+    padding: var(--gap-md);
+    color: var(--text-primary);
+}
+
+.popup-title {
+    font-size: 14px;
+    font-weight: 700;
+    margin-bottom: var(--gap-sm);
+    color: var(--accent);
+}
+
+.popup-detail {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+/* ── Remaining Styles (Log, UI, etc.) ─────────────────────── */
 .overlay {
     position: absolute;
     top: 0; left: 0; right: 0; bottom: 0;

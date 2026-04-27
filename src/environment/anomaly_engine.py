@@ -158,6 +158,10 @@ class AnomalyEngine:
             to_remove = []
             for i, anom in enumerate(active_list):
                 if anom.anomaly_type == atype:
+                    # Skip expiration for persistent anomalies
+                    if hasattr(self, "_persistent_anomalies") and id(anom) in self._persistent_anomalies:
+                        continue
+                        
                     anom.ticks_active += 1
                     if self.rng.random() < cfg.prob_disappear_per_step:
                         to_remove.append(i)
@@ -218,6 +222,55 @@ class AnomalyEngine:
         total = sum(len(v) for v in self.edge_anomalies.values())
         total += sum(len(v) for v in self.node_anomalies.values())
         return total
+
+    def force_anomaly(
+        self,
+        target: str | Tuple[str, str],
+        anomaly_type: str = "weather",
+        severity: float = 2.0,
+        cost_multiplier: float = 1.0,
+        persistent: bool = True,
+    ):
+        """
+        Manually inject an anomaly into a node or edge.
+        
+        Parameters
+        ----------
+        target : str or tuple
+            Node name or (src, tgt) edge tuple.
+        anomaly_type : str
+            weather | traffic | sentiment | geopolitical
+        severity : float
+            Travel time multiplier.
+        cost_multiplier : float
+            Cost multiplier.
+        persistent : bool
+            If True, this anomaly will not be subject to stochastic disappearance.
+        """
+        anom = ActiveAnomaly(
+            anomaly_type=anomaly_type,
+            severity=severity,
+            cost_multiplier=cost_multiplier,
+            ticks_active=0,
+        )
+        # We'll use a special flag or just a very low disappear prob if we wanted
+        # but for simplicity, let's just add it to the list.
+        # To make it truly persistent, we can wrap it or add a metadata field.
+        # For now, let's just add it.
+        if isinstance(target, tuple):
+            if target not in self.edge_anomalies:
+                self.edge_anomalies[target] = []
+            self.edge_anomalies[target].append(anom)
+        else:
+            if target not in self.node_anomalies:
+                self.node_anomalies[target] = []
+            self.node_anomalies[target].append(anom)
+
+        # If persistent, we might need to track it separately to prevent step() from clearing it.
+        if persistent:
+            if not hasattr(self, "_persistent_anomalies"):
+                self._persistent_anomalies = set()
+            self._persistent_anomalies.add(id(anom))
 
     def get_all_active_anomalies(self) -> dict:
         """Return all active edge and node anomalies across the entire graph."""

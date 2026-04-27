@@ -254,10 +254,10 @@ class SupplyChainEnv(gym.Env):
             if dst not in self._all_pairs_base_times.get(src, {}):
                 continue
                 
-            # Feasibility check: base time should be < 70% of shelf life
-            # (leaving 30% for anomalies and sub-optimal routing)
+            # Feasibility check: base time should be < 50% of shelf life
+            # (leaving 50% for anomalies, mode switches, and sub-optimal routing)
             base_time = self._all_pairs_base_times[src][dst]
-            if base_time < shipment.shelf_life_hours * 0.7:
+            if base_time < shipment.shelf_life_hours * 0.5:
                 return src, dst
                 
             attempts += 1

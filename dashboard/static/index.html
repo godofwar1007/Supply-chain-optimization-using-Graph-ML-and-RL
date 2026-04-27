@@ -11,9 +11,6 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     
-    <!-- Leaflet CSS -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -52,6 +49,7 @@
                     <label for="scenario-select">Network</label>
                     <select id="scenario-select">
                         <option value="india" selected>India (25 nodes)</option>
+                        <option value="reroute_test">Reroute Test (Manual Anomalies)</option>
                         <option value="volatile">Volatile (Stress Test)</option>
                         <option value="small">Test (4 nodes)</option>
                     </select>
@@ -169,7 +167,7 @@
     </main>
 
     <!-- Scripts -->
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="/static/app.js"></script>
+    <script src="https://maps.googleapis.com/maps/api/js?key=YOUR_API_KEY&callback=initMap&libraries=geometry" async defer></script>
 </body>
 </html>
