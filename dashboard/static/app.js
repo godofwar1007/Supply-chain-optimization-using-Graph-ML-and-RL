@@ -1,6 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════
-   SupplyChainAI Dashboard — Application Logic (Google Maps Version)
-   Handles map rendering, WebSocket simulation, and UI updates
+   Data2Delivery Dashboard — Application Logic
    ═══════════════════════════════════════════════════════════════ */
 
 "use strict";
@@ -24,33 +23,32 @@ let cumulativeReward = 0;
 
 // ── High-Contrast Dark Theme Style ──────────────────────────
 const darkStyle = [
-    { elementType: "geometry", stylers: [{ color: "#1a1a1a" }] },
+    { elementType: "geometry", stylers: [{ color: "#0d1322" }] },
     { elementType: "labels.icon", stylers: [{ visibility: "off" }] },
-    { elementType: "labels.text.fill", stylers: [{ color: "#616161" }] },
-    { elementType: "labels.text.stroke", stylers: [{ color: "#1a1a1a" }] },
-    { featureType: "administrative", elementType: "geometry", stylers: [{ color: "#444444" }] },
-    { featureType: "road", elementType: "geometry.fill", stylers: [{ color: "#222222" }] },
-    { featureType: "water", elementType: "geometry", stylers: [{ color: "#000000" }] }
+    { elementType: "labels.text.fill", stylers: [{ color: "#4d5d73" }] },
+    { elementType: "labels.text.stroke", stylers: [{ color: "#0d1322" }] },
+    { featureType: "administrative", elementType: "geometry", stylers: [{ color: "#3c4a46" }] },
+    { featureType: "road", elementType: "geometry.fill", stylers: [{ color: "#191f2f" }] },
+    { featureType: "water", elementType: "geometry", stylers: [{ color: "#080e1d" }] }
 ];
 
 // ── Color Palette ───────────────────────────────────────────
 const COLORS = {
-    network: "#555555",       // Brighter background network
-    optimal: "#00f2ff",       // Cyan for the "Best" path
-    active: "#bf00ff",        // Neon Purple for path travelled
-    anomaly: "#ff3f34",       // Bright Red for disruptions
-    source: "#ffd700",        // Gold
-    destination: "#00ff7f",   // Emerald Green
-    activeNode: "#ff9f1a",    // Orange for current location
-    metroNode: "#3498db",     // Blue for metro hubs
-    standardNode: "#444444"   // Gray for normal nodes
+    network: "#3c4a46",       
+    optimal: "#44ddc1",       // Primary Teal
+    active: "#68fadd",        
+    anomaly: "#ffb4ab",       // Error Coral
+    source: "#ffd700",        
+    destination: "#44ddc1",   
+    activeNode: "#68fadd",    
+    metroNode: "#44ddc1",     
+    standardNode: "#3c4a46"   
 };
 
 /**
  * Global Callback for Google Maps API
  */
 window.initMap = function () {
-    console.log("Initializing Google Maps...");
     const mapElement = document.getElementById("map");
     if (!mapElement) return;
 
@@ -58,13 +56,9 @@ window.initMap = function () {
         center: { lat: 22.5, lng: 80 },
         zoom: 5,
         styles: darkStyle,
-        disableDefaultUI: false,
+        disableDefaultUI: true,
         zoomControl: true,
-        mapTypeControl: false,
-        streetViewControl: false,
-        rotateControl: false,
-        fullscreenControl: true,
-        backgroundColor: "#1a1a1a"
+        backgroundColor: "#0d1322"
     });
 
     infoWindow = new google.maps.InfoWindow();
@@ -126,8 +120,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 path: [{ lat: edge.source_lat, lng: edge.source_lng }, { lat: edge.target_lat, lng: edge.target_lng }],
                 geodesic: true,
                 strokeColor: COLORS.network,
-                strokeOpacity: 0.4,
-                strokeWeight: 2.0,
+                strokeOpacity: 0.2,
+                strokeWeight: 1.5,
                 map: map
             });
 
@@ -143,11 +137,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 title: node.id,
                 icon: {
                     path: google.maps.SymbolPath.CIRCLE,
-                    scale: isMetro ? 5 : 3,
+                    scale: isMetro ? 4 : 2,
                     fillColor: isMetro ? COLORS.metroNode : COLORS.standardNode,
-                    fillOpacity: 0.5,
+                    fillOpacity: 0.6,
                     strokeWeight: 1,
-                    strokeColor: "#333333",
+                    strokeColor: "#3c4a46",
                 }
             });
 
@@ -165,7 +159,7 @@ document.addEventListener("DOMContentLoaded", () => {
     btnSimulate.addEventListener("click", () => {
         if (ws) ws.close();
         resetUI();
-        setStatus("running", "Simulating...");
+        setStatus("running", "In Progress");
         btnSimulate.disabled = true;
         btnStop.disabled = false;
 
@@ -191,7 +185,7 @@ document.addEventListener("DOMContentLoaded", () => {
         ws.onclose = () => {
             btnSimulate.disabled = false;
             btnStop.disabled = true;
-            if (statusText.textContent === "Simulating...") setStatus("ready", "Ready");
+            if (statusText.textContent === "In Progress") setStatus("ready", "Ready");
         };
     });
 
@@ -207,33 +201,30 @@ document.addEventListener("DOMContentLoaded", () => {
         anomaliesCard.style.display = "block";
 
         const s = data.shipment;
-        const agentLabel = data.agent_mode === "trained" ? "🧠 GNN+RL" : "🎲 Random";
+        const agentLabel = data.agent_mode === "trained" ? "Neural Navigator v4" : "Heuristic Core (Random)";
         
-        // Detailed shipment info grid
         shipmentInfo.innerHTML = `
-            <div class="info-item">
-                <span class="info-label">Product</span>
-                <span class="info-value">${s.product_type}</span>
+            <div class="flex justify-between items-start mb-3">
+                <div class="font-headline text-lg font-bold text-primary tracking-tight">${s.product_type}</div>
+                <span class="bg-primary/10 text-primary text-[9px] font-black px-2 py-0.5 rounded-full border border-primary/20 uppercase tracking-widest">${s.priority}</span>
             </div>
-            <div class="info-item">
-                <span class="info-label">Priority</span>
-                <span class="info-value">${s.priority}</span>
-            </div>
-            <div class="info-item">
-                <span class="info-label">Weight</span>
-                <span class="info-value">${s.weight_kg.toLocaleString()} kg</span>
-            </div>
-            <div class="info-item">
-                <span class="info-label">Shelf Life</span>
-                <span class="info-value">${s.shelf_life_hours}h</span>
-            </div>
-            <div class="info-item full-width" style="margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border);">
-                <span class="info-label">Origin → Destination</span>
-                <span class="info-value">${data.source} → ${data.destination}</span>
-            </div>
-            <div class="info-item full-width">
-                <span class="info-label">Navigation Agent</span>
-                <span class="agent-badge ${data.agent_mode}">${agentLabel}</span>
+            <div class="grid grid-cols-2 gap-y-3 gap-x-4">
+                <div>
+                    <div class="text-[9px] text-outline uppercase font-label tracking-wider mb-0.5">Route Vector</div>
+                    <div class="text-[11px] font-bold text-on-surface whitespace-nowrap overflow-hidden text-ellipsis">${data.source} → ${data.destination}</div>
+                </div>
+                <div>
+                    <div class="text-[9px] text-outline uppercase font-label tracking-wider mb-0.5">Payload</div>
+                    <div class="text-[11px] font-bold text-on-surface">${s.weight_kg.toLocaleString()} KG</div>
+                </div>
+                <div>
+                    <div class="text-[9px] text-outline uppercase font-label tracking-wider mb-0.5">Integrity Window</div>
+                    <div class="text-[11px] font-bold text-on-surface">${s.shelf_life_hours}H MAX</div>
+                </div>
+                <div>
+                    <div class="text-[9px] text-outline uppercase font-label tracking-wider mb-0.5">Control Logic</div>
+                    <div class="text-[11px] font-bold text-primary">${agentLabel}</div>
+                </div>
             </div>
         `;
 
@@ -245,25 +236,19 @@ document.addEventListener("DOMContentLoaded", () => {
     function handleStep(data) {
         cumulativeReward += data.reward;
         
-        // Update Live Metrics
         valSteps.textContent = data.step;
-        valTime.textContent = data.total_time.toFixed(1) + "h";
+        valTime.textContent = data.total_time.toFixed(1) + "H";
         valCost.textContent = "₹" + Math.round(data.total_cost).toLocaleString("en-IN");
         valRisk.textContent = data.total_risk.toFixed(3);
         valReward.textContent = cumulativeReward.toFixed(1);
-        valReward.style.color = cumulativeReward >= 0 ? "var(--green)" : "var(--red)";
+        valReward.style.color = cumulativeReward >= 0 ? "#44ddc1" : "#ffb4ab";
 
-        // Update Shelf Life Bar
         const shelfPct = data.shelf_remaining_pct;
-        valShelf.textContent = `${shelfPct}% Remaining`;
+        valShelf.textContent = `${shelfPct}%`;
         shelfBar.style.width = `${shelfPct}%`;
         
-        // Dynamic bar color based on remaining life
-        shelfBar.classList.remove("warning", "danger");
-        if (shelfPct < 25) shelfBar.classList.add("danger");
-        else if (shelfPct < 50) shelfBar.classList.add("warning");
+        shelfBar.style.backgroundColor = shelfPct < 25 ? "#ffb4ab" : (shelfPct < 50 ? "#ffd700" : "#44ddc1");
 
-        // Update Global Anomalies List
         if (data.global_anomalies) {
             updateGlobalAnomaliesList(data.global_anomalies);
             updateMapAnomalies(data.global_anomalies);
@@ -280,7 +265,6 @@ document.addEventListener("DOMContentLoaded", () => {
         anomaliesList.innerHTML = "";
         let count = 0;
 
-        // Process edges
         if (anoms.edges) {
             Object.keys(anoms.edges).forEach(key => {
                 const edgeAnoms = anoms.edges[key];
@@ -290,18 +274,17 @@ document.addEventListener("DOMContentLoaded", () => {
                     const item = document.createElement("div");
                     item.className = `anomaly-item ${a.type}`;
                     item.innerHTML = `
-                        <div class="anomaly-item-header">
-                            <span>${a.type.toUpperCase()}</span>
-                            <span>${a.severity}x</span>
+                        <div class="flex justify-between items-center mb-1">
+                            <span class="font-black uppercase text-[9px] tracking-widest">${a.type}</span>
+                            <span class="text-primary font-mono text-[9px]">${a.severity}X IMPACT</span>
                         </div>
-                        <div class="anomaly-item-target">${src} → ${tgt}</div>
+                        <div class="text-[10px] opacity-60 font-mono">${src} → ${tgt}</div>
                     `;
                     anomaliesList.appendChild(item);
                 });
             });
         }
 
-        // Process nodes
         if (anoms.nodes) {
             Object.keys(anoms.nodes).forEach(nodeId => {
                 const nodeAnoms = anoms.nodes[nodeId];
@@ -310,11 +293,11 @@ document.addEventListener("DOMContentLoaded", () => {
                     const item = document.createElement("div");
                     item.className = `anomaly-item ${a.type}`;
                     item.innerHTML = `
-                        <div class="anomaly-item-header">
-                            <span>${a.type.toUpperCase()}</span>
-                            <span>${a.severity}x</span>
+                        <div class="flex justify-between items-center mb-1">
+                            <span class="font-black uppercase text-[9px] tracking-widest">${a.type}</span>
+                            <span class="text-primary font-mono text-[9px]">${a.severity}X IMPACT</span>
                         </div>
-                        <div class="anomaly-item-target">City: ${nodeId}</div>
+                        <div class="text-[10px] opacity-60 font-mono">NODE: ${nodeId}</div>
                     `;
                     anomaliesList.appendChild(item);
                 });
@@ -322,33 +305,64 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         if (count === 0) {
-            anomaliesList.innerHTML = '<div class="log-placeholder">No active disruptions.</div>';
+            anomaliesList.innerHTML = '<div class="text-[10px] text-outline text-center py-4 opacity-30 uppercase tracking-widest">No active disruptions</div>';
         }
     }
 
     function handleDone(data) {
-        setStatus("ready", data.delivered ? "Delivered!" : "Failed");
+        setStatus("ready", data.delivered ? "Completed" : "System Error");
+        
         deliveryOverlay.style.display = "flex";
+        setTimeout(() => {
+            deliveryOverlay.style.opacity = "1";
+            deliveryOverlay.style.pointerEvents = "auto";
+            deliveryOverlay.querySelector(".glass-panel").style.transform = "scale(1)";
+        }, 10);
+
+        const statusIcon = data.delivered ? "check_circle" : "error";
+        const statusColor = data.delivered ? "text-primary" : "text-error";
+        
         deliveryContent.innerHTML = `
-            <div class="overlay-icon">${data.delivered ? "✅" : "❌"}</div>
-            <h3>${data.delivered ? "Successfully Delivered!" : "Shipment Failed"}</h3>
-            <div class="overlay-stats">
-                <p>Path: ${data.path.join(" → ")}</p>
-                <p>Steps: ${data.total_steps} | Time: ${data.total_time_hours}h</p>
-                <p>Cost: ₹${data.total_cost.toLocaleString("en-IN")}</p>
+            <div class="mb-6">
+                <span class="material-symbols-outlined text-6xl ${statusColor} mb-4">${statusIcon}</span>
+                <h2 class="text-3xl font-black font-headline tracking-tighter mb-2 text-on-surface">
+                    ${data.delivered ? "DELIVERY SUCCESS" : "MISSION FAILURE"}
+                </h2>
+                <p class="text-outline text-xs uppercase tracking-[0.3em] font-label">Simulation Technical Summary</p>
             </div>
+            
+            <div class="grid grid-cols-2 gap-4 mb-8">
+                <div class="p-4 bg-surface-container-lowest/50 rounded-2xl border border-outline-variant/10 text-left">
+                    <div class="text-[9px] text-outline uppercase tracking-widest mb-1">Time Elapsed</div>
+                    <div class="text-xl font-bold font-label">${data.total_time_hours}H</div>
+                </div>
+                <div class="p-4 bg-surface-container-lowest/50 rounded-2xl border border-outline-variant/10 text-left">
+                    <div class="text-[9px] text-outline uppercase tracking-widest mb-1">Total Resource Cost</div>
+                    <div class="text-xl font-bold font-label text-primary">₹${data.total_cost.toLocaleString("en-IN")}</div>
+                </div>
+                <div class="p-4 bg-surface-container-lowest/50 rounded-2xl border border-outline-variant/10 text-left">
+                    <div class="text-[9px] text-outline uppercase tracking-widest mb-1">Hop Count</div>
+                    <div class="text-xl font-bold font-label">${data.total_steps} STEPS</div>
+                </div>
+                <div class="p-4 bg-surface-container-lowest/50 rounded-2xl border border-outline-variant/10 text-left">
+                    <div class="text-[9px] text-outline uppercase tracking-widest mb-1">Final Risk Score</div>
+                    <div class="text-xl font-bold font-label text-error">${data.total_risk.toFixed(3)}</div>
+                </div>
+            </div>
+
+            <button onclick="document.getElementById('delivery-overlay').style.display='none'" class="w-full py-4 bg-primary text-on-primary rounded-xl font-black text-xs uppercase tracking-widest active:scale-95 transition-all shadow-xl shadow-primary/20">
+                Dismiss Technical Report
+            </button>
         `;
-        deliveryContent.parentElement.className = `overlay ${data.delivered ? "success" : "failure"}`;
     }
 
-    // ── Helper Functions ────────────────────────────────────────
     function highlightNode(id, type) {
         const mObj = markers[id];
         if (!mObj) return;
         const icon = mObj.marker.getIcon();
-        if (type === "source") { icon.fillColor = COLORS.source; icon.scale = 10; icon.fillOpacity = 1.0; }
-        else if (type === "destination") { icon.fillColor = COLORS.destination; icon.scale = 10; icon.fillOpacity = 1.0; }
-        else if (type === "active") { icon.fillColor = COLORS.activeNode; icon.scale = 8; icon.fillOpacity = 1.0; }
+        if (type === "source") { icon.fillColor = COLORS.source; icon.scale = 8; icon.fillOpacity = 1.0; }
+        else if (type === "destination") { icon.fillColor = COLORS.destination; icon.scale = 8; icon.fillOpacity = 1.0; }
+        else if (type === "active") { icon.fillColor = COLORS.activeNode; icon.scale = 6; icon.fillOpacity = 1.0; }
         mObj.marker.setIcon(icon);
         mObj.marker.setZIndex(1000);
     }
@@ -356,7 +370,7 @@ document.addEventListener("DOMContentLoaded", () => {
     function drawPathSegment(data) {
         const poly = new google.maps.Polyline({
             path: [{ lat: data.from_lat, lng: data.from_lng }, { lat: data.to_lat, lng: data.to_lng }],
-            strokeColor: COLORS.active, strokeOpacity: 1.0, strokeWeight: 6, map: map
+            strokeColor: COLORS.active, strokeOpacity: 1.0, strokeWeight: 4, map: map
         });
         layers.activePath.push(poly);
         animateMarkerAlongPath(data.from_lat, data.from_lng, data.to_lat, data.to_lng, data.vehicle_type);
@@ -368,7 +382,7 @@ document.addEventListener("DOMContentLoaded", () => {
             position: { lat: flat, lng: flng },
             map: map,
             icon: { path: google.maps.SymbolPath.CIRCLE, scale: 0 },
-            label: { text: icons[vehicleType] || "📦", fontSize: "28px" }
+            label: { text: icons[vehicleType] || "📦", fontSize: "24px" }
         });
         layers.animation.push(marker);
 
@@ -389,14 +403,9 @@ document.addEventListener("DOMContentLoaded", () => {
         const poly = new google.maps.Polyline({
             path: path.map(id => ({ lat: markers[id].lat, lng: markers[id].lng })),
             strokeColor: COLORS.optimal, 
-            strokeOpacity: 0.8, 
-            strokeWeight: isInitial ? 3 : 5,
+            strokeOpacity: 0.5, 
+            strokeWeight: isInitial ? 2 : 4,
             zIndex: 500,
-            icons: [{
-                icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 2 },
-                offset: '0',
-                repeat: '10px'
-            }],
             map: map
         });
         poly.isDyn = !isInitial;
@@ -404,36 +413,32 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function updateMapAnomalies(anoms) {
-        // Reset all edges to base
         Object.keys(edgeMarkers).forEach(k => {
-            edgeMarkers[k].line.setOptions({ strokeColor: COLORS.network, strokeOpacity: 0.1, strokeWeight: 1.0 });
+            edgeMarkers[k].line.setOptions({ strokeColor: COLORS.network, strokeOpacity: 0.2, strokeWeight: 1.5 });
         });
-        // Reset all nodes to base
         layers.nodes.forEach(m => { 
             const icon = m.getIcon(); 
             const locData = markers[m.title];
             icon.fillColor = locData.type === "metro" ? COLORS.metroNode : COLORS.standardNode; 
-            icon.fillOpacity = 0.5;
-            icon.scale = locData.type === "metro" ? 5 : 3;
+            icon.fillOpacity = 0.6;
+            icon.scale = locData.type === "metro" ? 4 : 2;
             m.setIcon(icon); 
         });
 
-        // Highlight affected edges (Subtle Glow)
         if (anoms.edges) {
             Object.keys(anoms.edges).forEach(key => {
                 if (edgeMarkers[key]) {
-                    edgeMarkers[key].line.setOptions({ strokeColor: COLORS.anomaly, strokeOpacity: 0.6, strokeWeight: 3 });
+                    edgeMarkers[key].line.setOptions({ strokeColor: COLORS.anomaly, strokeOpacity: 0.8, strokeWeight: 3 });
                 }
             });
         }
-        // Highlight affected nodes
         if (anoms.nodes) {
             Object.keys(anoms.nodes).forEach(id => {
                 if (markers[id]) {
                     const icon = markers[id].marker.getIcon();
                     icon.fillColor = COLORS.anomaly;
                     icon.fillOpacity = 0.9;
-                    icon.scale = 7;
+                    icon.scale = 5;
                     markers[id].marker.setIcon(icon);
                 }
             });
@@ -441,7 +446,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function addLogEntry(data) {
-        // Remove placeholder if it exists
         const placeholder = stepLog.querySelector(".log-placeholder");
         if (placeholder) placeholder.remove();
 
@@ -450,29 +454,37 @@ document.addEventListener("DOMContentLoaded", () => {
         if (data.delivered) entry.classList.add("delivered");
 
         const anomaliesHtml = data.anomalies.map(a => 
-            `<span class="anomaly-tag ${a.type}">${a.type}: ${a.severity}x</span>`
-        ).join("");
+            `<span class="anomaly-tag ${a.type}">${a.type}</span>`
+        ).join(" ");
+
+        const icons = { truck: "local_shipping", rail: "train", air: "flight", ship: "directions_boat" };
+        const icon = icons[data.vehicle_type] || "package";
 
         entry.innerHTML = `
-            <div class="log-entry-header">
-                <span class="log-step-num">STEP ${data.step}</span>
-                <span class="log-vehicle">${data.vehicle_type}</span>
+            <div class="flex items-center justify-between mb-2">
+                <span class="text-[9px] font-black text-primary uppercase tracking-[0.2em]">Step ${data.step}</span>
+                <span class="material-symbols-outlined text-sm text-outline opacity-40">${icon}</span>
             </div>
-            <div class="log-route">${data.from} → ${data.to}</div>
-            <div class="log-details">
-                <span>⏱ ${data.time_hours}h</span>
-                <span>💰 ₹${Math.round(data.cost).toLocaleString("en-IN")}</span>
-                <span>⚠ ${data.risk.toFixed(3)}</span>
+            <div class="text-[11px] font-bold mb-2 tracking-tight">${data.from} → ${data.to}</div>
+            <div class="grid grid-cols-3 gap-2 opacity-60">
+                <div class="text-[9px] font-mono">⏱ ${data.time_hours}h</div>
+                <div class="text-[9px] font-mono">💰 ₹${Math.round(data.cost)}</div>
+                <div class="text-[9px] font-mono">⚠ ${data.risk.toFixed(2)}</div>
             </div>
-            ${anomaliesHtml ? `<div class="log-anomalies">${anomaliesHtml}</div>` : ""}
+            ${anomaliesHtml ? `<div class="mt-2">${anomaliesHtml}</div>` : ""}
         `;
         
-        stepLog.appendChild(entry);
-        stepLog.scrollTop = stepLog.scrollHeight;
+        stepLog.prepend(entry);
     }
 
     function resetUI() {
-        deliveryOverlay.style.display = "none";
+        deliveryOverlay.style.opacity = "0";
+        deliveryOverlay.style.pointerEvents = "none";
+        deliveryOverlay.querySelector(".glass-panel").style.transform = "scale(0.95)";
+        setTimeout(() => {
+            deliveryOverlay.style.display = "none";
+        }, 500);
+        
         ["activePath", "optimalPath", "animation"].forEach(k => clearLayer(k));
         cumulativeReward = 0;
         stepLog.innerHTML = "";
@@ -480,18 +492,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function setStatus(type, text) {
         statusText.textContent = text;
-        statusBadge.className = `status-badge ${type === "running" ? "running" : ""}`;
+        statusBadge.className = `status-badge px-4 py-1.5 bg-surface-container-low rounded-full border border-outline-variant/20 flex items-center ${type === "running" ? "running" : ""}`;
     }
 
     async function checkModelStatus() {
         try {
             const resp = await fetch("/api/model-status");
             const d = await resp.json();
-            agentStatus.textContent = d.available ? `✅ ${d.model}` : "⚠ No model";
+            agentStatus.innerHTML = d.available ? `<span class="text-[#44ddc1]">●</span> GNN ENGINE: ${d.model}` : "⚠ GNN ENGINE: OFFLINE";
         } catch (e) {}
     }
 
     scenarioSelect.addEventListener("change", () => loadNetwork(scenarioSelect.value));
     speedSlider.addEventListener("input", () => speedLabel.textContent = (parseInt(speedSlider.value) / 1000).toFixed(1) + "s");
-    deliveryOverlay.addEventListener("click", () => deliveryOverlay.style.display = "none");
 });
