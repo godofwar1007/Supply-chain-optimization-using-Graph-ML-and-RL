@@ -7,6 +7,10 @@ and carries a severity multiplier that affects travel time and cost.
 
 Designed with a clean interface so real data sources (weather APIs, news
 sentiment models) can replace the stochastic generators later.
+
+Supports dynamic spawn probability scaling for curriculum learning:
+  engine.set_phase(1)          # Phase 1 — 30% of base spawn rates
+  engine.set_spawn_scale(0.6)  # Or set any scale directly
 """
 
 from __future__ import annotations
@@ -35,6 +39,9 @@ class AnomalyEngine:
     having multiple concurrent anomalies of different types.
     """
 
+    # Phase-to-scale mapping for curriculum learning
+    _PHASE_SCALE = {1: 0.3, 2: 0.6, 3: 1.0}
+
     def __init__(self, config: AnomalyConfig, rng: Optional[random.Random] = None):
         self.config = config
         self.rng = rng or random.Random()
@@ -42,6 +49,40 @@ class AnomalyEngine:
         # Active anomalies keyed by location name or (src, tgt) edge tuple
         self.edge_anomalies: Dict[Tuple[str, str], List[ActiveAnomaly]] = {}
         self.node_anomalies: Dict[str, List[ActiveAnomaly]] = {}
+
+        # ── Curriculum scaling ─────────────────────────────────────────
+        # Scale factor applied to all prob_appear values (0.0–1.0).
+        # Allows the training loop to reduce anomaly frequency for
+        # early curriculum phases, then ramp up to full difficulty.
+        self._spawn_scale: float = 1.0
+
+    def set_spawn_scale(self, scale: float) -> None:
+        """
+        Set the spawn-probability scale factor (curriculum learning).
+
+        Parameters
+        ----------
+        scale : float
+            Multiplier in [0.0, 1.0] applied to every anomaly type's
+            ``prob_appear_per_step``.  A value of 0.3 means anomalies
+            spawn at 30% of their configured base rate.
+        """
+        self._spawn_scale = max(0.0, min(float(scale), 1.0))
+
+    def get_spawn_scale(self) -> float:
+        """Return the current spawn-probability scale factor."""
+        return self._spawn_scale
+
+    def set_phase(self, phase: int) -> None:
+        """
+        Convenience wrapper: set anomaly difficulty by curriculum phase.
+
+        Phase 1 → 30% of base spawn rates  (easy)
+        Phase 2 → 60% of base spawn rates  (medium)
+        Phase 3 → 100% of base spawn rates (full difficulty)
+        """
+        scale = self._PHASE_SCALE.get(phase, 1.0)
+        self.set_spawn_scale(scale)
 
     def _anomaly_types(self) -> Dict[str, AnomalyTypeConfig]:
         """Return all anomaly type configs as a dict."""
@@ -56,6 +97,7 @@ class AnomalyEngine:
         self,
         edge_keys: List[Tuple[str, str]],
         node_keys: List[str],
+        volatile_keys: List[Tuple[str, str]] = None,
         warmup_steps: int = 5,
     ):
         """
@@ -64,6 +106,7 @@ class AnomalyEngine:
         """
         self.edge_anomalies = {k: [] for k in edge_keys}
         self.node_anomalies = {k: [] for k in node_keys}
+        self.volatile_keys = set(volatile_keys or [])
 
         for _ in range(warmup_steps):
             self.step()
@@ -74,22 +117,36 @@ class AnomalyEngine:
 
         for atype, cfg in type_configs.items():
             if cfg.affects in ("edges", "both"):
-                self._update_dict(self.edge_anomalies, atype, cfg)
+                self._update_dict(self.edge_anomalies, atype, cfg, is_edge=True)
             if cfg.affects in ("nodes", "both"):
-                self._update_dict(self.node_anomalies, atype, cfg)
+                self._update_dict(self.node_anomalies, atype, cfg, is_edge=False)
 
     def _update_dict(
         self,
         anomaly_dict: Dict,
         atype: str,
         cfg: AnomalyTypeConfig,
+        is_edge: bool = False,
     ):
         """Spawn / expire anomalies for one dict (edges or nodes)."""
+        # Apply curriculum scale to the spawn probability only —
+        # disappear probability stays unchanged so existing anomalies
+        # clear at the normal rate.
+        base_appear = cfg.prob_appear_per_step * self._spawn_scale
+
         for key, active_list in anomaly_dict.items():
             # --- Spawn new ---
+            # Volatile edges have 3x higher spawn probability and higher minimum severity
+            spawn_prob = base_appear
+            severity_min = cfg.severity_min
+            
+            if is_edge and key in self.volatile_keys:
+                spawn_prob = min(0.9, base_appear * 3.0)
+                severity_min = (cfg.severity_min + cfg.severity_max) / 2.0
+
             already_has = any(a.anomaly_type == atype for a in active_list)
-            if not already_has and self.rng.random() < cfg.prob_appear_per_step:
-                severity = self.rng.uniform(cfg.severity_min, cfg.severity_max)
+            if not already_has and self.rng.random() < spawn_prob:
+                severity = self.rng.uniform(severity_min, cfg.severity_max)
                 active_list.append(ActiveAnomaly(
                     anomaly_type=atype,
                     severity=severity,
@@ -101,6 +158,10 @@ class AnomalyEngine:
             to_remove = []
             for i, anom in enumerate(active_list):
                 if anom.anomaly_type == atype:
+                    # Skip expiration for persistent anomalies
+                    if hasattr(self, "_persistent_anomalies") and id(anom) in self._persistent_anomalies:
+                        continue
+                        
                     anom.ticks_active += 1
                     if self.rng.random() < cfg.prob_disappear_per_step:
                         to_remove.append(i)
@@ -161,3 +222,72 @@ class AnomalyEngine:
         total = sum(len(v) for v in self.edge_anomalies.values())
         total += sum(len(v) for v in self.node_anomalies.values())
         return total
+
+    def force_anomaly(
+        self,
+        target: str | Tuple[str, str],
+        anomaly_type: str = "weather",
+        severity: float = 2.0,
+        cost_multiplier: float = 1.0,
+        persistent: bool = True,
+    ):
+        """
+        Manually inject an anomaly into a node or edge.
+        
+        Parameters
+        ----------
+        target : str or tuple
+            Node name or (src, tgt) edge tuple.
+        anomaly_type : str
+            weather | traffic | sentiment | geopolitical
+        severity : float
+            Travel time multiplier.
+        cost_multiplier : float
+            Cost multiplier.
+        persistent : bool
+            If True, this anomaly will not be subject to stochastic disappearance.
+        """
+        anom = ActiveAnomaly(
+            anomaly_type=anomaly_type,
+            severity=severity,
+            cost_multiplier=cost_multiplier,
+            ticks_active=0,
+        )
+        # We'll use a special flag or just a very low disappear prob if we wanted
+        # but for simplicity, let's just add it to the list.
+        # To make it truly persistent, we can wrap it or add a metadata field.
+        # For now, let's just add it.
+        if isinstance(target, tuple):
+            if target not in self.edge_anomalies:
+                self.edge_anomalies[target] = []
+            self.edge_anomalies[target].append(anom)
+        else:
+            if target not in self.node_anomalies:
+                self.node_anomalies[target] = []
+            self.node_anomalies[target].append(anom)
+
+        # If persistent, we might need to track it separately to prevent step() from clearing it.
+        if persistent:
+            if not hasattr(self, "_persistent_anomalies"):
+                self._persistent_anomalies = set()
+            self._persistent_anomalies.add(id(anom))
+
+    def get_all_active_anomalies(self) -> dict:
+        """Return all active edge and node anomalies across the entire graph."""
+        edges = {}
+        for (src, tgt), anomalies in self.edge_anomalies.items():
+            if anomalies:
+                edges[f"{src}___{tgt}"] = [
+                    {"type": a.anomaly_type, "severity": round(a.severity, 2)}
+                    for a in anomalies
+                ]
+        
+        nodes = {}
+        for node, anomalies in self.node_anomalies.items():
+            if anomalies:
+                nodes[node] = [
+                    {"type": a.anomaly_type, "severity": round(a.severity, 2)}
+                    for a in anomalies
+                ]
+        
+        return {"edges": edges, "nodes": nodes}

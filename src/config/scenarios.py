@@ -2,7 +2,7 @@
 Pre-built scenarios for the supply chain environment.
 
 - small_scenario():  4 nodes for unit tests / fast iteration
-- india_scenario():  25 Indian cities — medium-scale demo scenario
+- india_scenario():  40 Indian cities — large-scale demo scenario
 """
 
 from __future__ import annotations
@@ -103,10 +103,12 @@ def small_scenario() -> ScenarioConfig:
 
 def india_scenario() -> ScenarioConfig:
     """
-    Medium-scale Indian supply chain network.
+    Large-scale Indian supply chain network.
 
-    25 cities with realistic lat/lng, warehouse placements at major hubs,
+    40 cities with realistic lat/lng, warehouse placements at major hubs,
     and a fleet of trucks + rail vehicles distributed across the network.
+    Includes 15 additional intermediate cities to create genuine routing
+    choices, bottlenecks, and alternative paths across all regions.
     Designed to look great on a map-based dashboard.
     """
 
@@ -141,6 +143,30 @@ def india_scenario() -> ScenarioConfig:
         LocationConfig("Surat",          21.1702, 72.8311, "urban", True, 2500, 0.35, False, 5.5, 130),
         LocationConfig("Kanpur",         26.4499, 80.3319, "urban", False),
         LocationConfig("Raipur",         21.2514, 81.6296, "urban", True, 1500, 0.30, False, 4.5, 90),
+
+        # ── NEW: 15 additional intermediate cities ──────────────────────
+        # North India
+        LocationConfig("Agra",      27.1767, 78.0081, "urban", True,  2000, 0.35, False, 5.0, 110),
+        LocationConfig("Varanasi",  25.3176, 82.9739, "urban", True,  1500, 0.40, False, 4.5, 100),
+        LocationConfig("Ludhiana",  30.9010, 75.8573, "urban", True,  2500, 0.30, False, 5.5, 120),
+        LocationConfig("Amritsar",  31.6340, 74.8723, "urban", True,  1500, 0.25, False, 5.0, 100),
+
+        # Central / East India
+        LocationConfig("Gwalior",   26.2183, 78.1828, "urban", True,  1500, 0.35, False, 4.5, 90),
+        LocationConfig("Jabalpur",  23.1815, 79.9864, "urban", True,  2000, 0.30, False, 5.0, 100),
+        LocationConfig("Ranchi",    23.3441, 85.3096, "urban", True,  1500, 0.40, False, 4.0, 90),
+
+        # South India
+        LocationConfig("Mysore",    12.2958, 76.6394, "urban", True,  2000, 0.25, False, 5.0, 110),
+        LocationConfig("Mangalore",  12.9141, 74.8560, "port",  True,  2500, 0.20, True,  6.0, 130),
+        LocationConfig("Madurai",   9.9252,  78.1198, "urban", True,  1500, 0.30, False, 4.5, 90),
+        LocationConfig("Hubli",     15.3647, 75.1240, "urban", True,  1500, 0.30, False, 4.5, 80),
+
+        # West India
+        LocationConfig("Rajkot",    22.3039, 70.8022, "urban", True,  2000, 0.35, False, 5.0, 100),
+        LocationConfig("Jodhpur",   26.2389, 73.0243, "urban", True,  1500, 0.30, False, 4.5, 90),
+        LocationConfig("Udaipur",   24.5854, 73.7125, "urban", True,  1500, 0.25, False, 4.5, 85),
+        LocationConfig("Nashik",    19.9975, 73.7898, "urban", True,  2000, 0.35, False, 5.0, 100),
     ]
 
     # Build a lookup dict for haversine
@@ -206,6 +232,54 @@ def india_scenario() -> ScenarioConfig:
         # Kerala
         ("Kochi", "Coimbatore",          "mountainous", 0.70, 200),
         ("Kochi", "Thiruvananthapuram",  "coastal", 0.80, 150),
+
+        # ── NEW routes for the 15 additional cities ─────────────────────
+        # North India — Agra hub
+        ("Delhi",      "Agra",      "flat",  0.90, 200),
+        ("Agra",       "Gwalior",   "flat",  0.85, 150),
+        ("Agra",       "Kanpur",    "flat",  0.85, 180),
+        ("Agra",       "Lucknow",   "flat",  0.80, 200),
+
+        # North India — Varanasi spoke
+        ("Varanasi",   "Patna",     "flat",  0.80, 150),
+        ("Varanasi",   "Kanpur",    "flat",  0.80, 200),
+        ("Varanasi",   "Ranchi",    "hilly", 0.70, 250),
+
+        # North India — Punjab corridor
+        ("Chandigarh", "Ludhiana",  "flat",  0.90, 100),
+        ("Ludhiana",   "Amritsar",  "flat",  0.90, 100),
+        ("Delhi",      "Ludhiana",  "flat",  0.85, 250),
+
+        # Central — Gwalior & Jabalpur
+        ("Gwalior",    "Bhopal",    "flat",  0.80, 200),
+        ("Jabalpur",   "Bhopal",    "flat",  0.80, 180),
+        ("Jabalpur",   "Nagpur",    "flat",  0.80, 200),
+        ("Jabalpur",   "Raipur",    "flat",  0.75, 220),
+
+        # East — Ranchi
+        ("Ranchi",     "Patna",     "hilly", 0.75, 200),
+        ("Ranchi",     "Kolkata",   "flat",  0.80, 250),
+        ("Ranchi",     "Bhubaneswar", "hilly", 0.70, 230),
+
+        # South — Mysore / Mangalore / Madurai / Hubli
+        ("Bangalore",  "Mysore",    "flat",  0.90, 150),
+        ("Mysore",     "Mangalore", "mountainous", 0.65, 200),
+        ("Mysore",     "Madurai",   "flat",  0.80, 200),
+        ("Bangalore",  "Hubli",     "flat",  0.80, 200),
+        ("Hubli",      "Mangalore", "mountainous", 0.65, 180),
+        ("Chennai",    "Madurai",   "flat",  0.85, 200),
+        ("Coimbatore", "Madurai",   "flat",  0.85, 150),
+
+        # West — Rajkot / Jodhpur / Udaipur / Nashik
+        ("Ahmedabad",  "Rajkot",    "flat",  0.85, 150),
+        ("Rajkot",     "Surat",     "coastal", 0.80, 200),
+        ("Jaipur",     "Jodhpur",   "flat",  0.80, 200),
+        ("Jodhpur",    "Udaipur",   "hilly", 0.75, 150),
+        ("Udaipur",    "Ahmedabad", "hilly", 0.75, 200),
+        ("Udaipur",    "Indore",    "hilly", 0.70, 200),
+        ("Mumbai",     "Nashik",    "hilly", 0.85, 150),
+        ("Nashik",     "Pune",      "hilly", 0.85, 130),
+        ("Nashik",     "Ahmedabad", "flat",  0.80, 200),
     ]
 
     routes: List[RouteConfig] = []
@@ -239,20 +313,83 @@ def india_scenario() -> ScenarioConfig:
     # ── Shipment templates ─────────────────────────────────────────────
     templates = [
         ShipmentTemplate("electronics",   0.8, 720,  0.3, 400,  1.5, "high",     80000),
-        ShipmentTemplate("pharmaceuticals",0.9, 240,  0.9, 200,  0.5, "critical", 200000),
+        ShipmentTemplate("pharmaceuticals",0.9, 480,  0.9, 200,  0.5, "critical", 200000),
         ShipmentTemplate("textiles",      0.2, 2160, 0.1, 1000, 5.0, "low",      20000),
-        ShipmentTemplate("perishables",   0.6, 120,   1.0, 800,  3.0, "high",     40000),
+        ShipmentTemplate("perishables",   0.6, 240,   1.0, 800,  3.0, "high",     40000),
         ShipmentTemplate("machinery",     0.4, 4320, 0.1, 5000, 10.0,"medium",   150000),
         ShipmentTemplate("fmcg",          0.3, 360,  0.2, 600,  2.5, "medium",   15000),
     ]
 
     cfg = ScenarioConfig(
-        name="india_medium",
+        name="india_large",
         locations=locations,
         routes=routes,
         vehicles=vehicles,
         shipment_templates=templates,
-        max_steps=40,
+        max_steps=50,
     )
     cfg.auto_compute_times()
     return cfg
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Volatile Scenario (Stress Test)
+# ═══════════════════════════════════════════════════════════════════
+
+def volatile_scenario() -> ScenarioConfig:
+    """
+    Stress-test scenario: Primary high-speed routes are extremely volatile.
+    
+    A "Golden Quadrilateral" connects Delhi-Mumbai-Chennai-Kolkata with
+    high-speed, low-toll roads, but they are flagged as 'is_volatile'.
+    Alternative paths through central India (Bhopal, Nagpur, Hyderabad)
+    are more stable but have higher base costs/times.
+    """
+    india = india_scenario()
+    
+    # 1. Identify primary path (Golden Quadrilateral + main trunks)
+    primary_edges = {
+        ("Delhi", "Agra"), ("Agra", "Mumbai"), ("Mumbai", "Surat"), 
+        ("Surat", "Ahmedabad"), ("Mumbai", "Pune"), ("Pune", "Bangalore"),
+        ("Bangalore", "Chennai"), ("Chennai", "Visakhapatnam"),
+        ("Visakhapatnam", "Bhubaneswar"), ("Bhubaneswar", "Kolkata"),
+        ("Kolkata", "Varanasi"), ("Varanasi", "Agra"), ("Delhi", "Jaipur")
+    }
+
+    # 2. Update routes: Make primary paths very efficient but volatile
+    for route in india.routes:
+        if (route.source, route.target) in primary_edges or (route.target, route.source) in primary_edges:
+            route.is_volatile = True
+            route.road_grading = 0.95  # Fast roads
+            route.toll_cost *= 0.5     # Cheap tolls to lure the agent
+        else:
+            # Stable alternative paths: slightly worse but reliable
+            route.is_volatile = False
+            route.road_grading = 0.75  # Slower roads
+            route.toll_cost *= 1.2     # Higher tolls
+
+    india.name = "india_volatile"
+    india.auto_compute_times()
+    return india
+
+# ═══════════════════════════════════════════════════════════════════════
+# Reroute Test Scenario (Controlled Anomalies)
+# ═══════════════════════════════════════════════════════════════════════
+
+def reroute_test_scenario() -> ScenarioConfig:
+    """
+    Scenario for testing rerouting logic.
+    Uses the India map but disables ALL stochastic anomalies.
+    The dashboard will manually inject anomalies on the optimal path.
+    """
+    india = india_scenario()
+    
+    # Disable all stochastic anomalies by setting spawn probs to 0
+    # This keeps the schema identical for the trained agent
+    india.anomaly_config.weather.prob_appear_per_step = 0.0
+    india.anomaly_config.traffic.prob_appear_per_step = 0.0
+    india.anomaly_config.sentiment.prob_appear_per_step = 0.0
+    india.anomaly_config.geopolitical.prob_appear_per_step = 0.0
+    
+    india.name = "reroute_test"
+    return india

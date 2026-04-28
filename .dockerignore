@@ -1,0 +1,10 @@
+.git
+.venv
+.idea
+__pycache__
+tests/
+smaller_attempts/
+docs/
+*.md
+.python-version
+.gitignore

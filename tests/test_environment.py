@@ -23,7 +23,7 @@ from src.environment.supply_chain_env import SupplyChainEnv
 from src.features.feature_engine import FeatureEngine
 
 
-def test_scenario(name: str, config, num_episodes=100, verbose_episode=0):
+def run_test_scenario(name: str, config, num_episodes=10, verbose_episode=0):
     """Run smoke test on a scenario."""
     print(f"\n{'='*70}")
     print(f"  Testing: {name} ({len(config.locations)} locations, "
@@ -108,37 +108,36 @@ def test_scenario(name: str, config, num_episodes=100, verbose_episode=0):
     print(f"     Avg cost:    ₹{np.mean(all_costs):,.0f} ± ₹{np.std(all_costs):,.0f}")
     print(f"     Reward range: [{min(all_rewards):.2f}, {max(all_rewards):.2f}]")
 
-    if len(errors) == 0:
-        print(f"\n  ✅ {name} PASSED — no errors in {num_episodes} episodes")
-    else:
-        print(f"\n  ❌ {name} FAILED — {len(errors)} errors")
+    assert len(errors) == 0, f"{name} scenario failed with {len(errors)} errors"
 
-    return len(errors) == 0
+
+def test_small_scenario():
+    """Pytest case for the small scenario."""
+    run_test_scenario("Small (4-node test)", small_scenario(), num_episodes=10)
+
+
+def test_india_scenario():
+    """Pytest case for the India scenario."""
+    run_test_scenario("India (25-node medium)", india_scenario(), num_episodes=20)
 
 
 if __name__ == "__main__":
     print("🔧 Phase 1 Verification — Supply Chain Environment")
     print("=" * 70)
 
-    results = {}
+    try:
+        # Test small scenario
+        run_test_scenario(
+            "Small (4-node test)", small_scenario(),
+            num_episodes=50, verbose_episode=0,
+        )
 
-    # Test small scenario
-    results["small"] = test_scenario(
-        "Small (4-node test)", small_scenario(),
-        num_episodes=50, verbose_episode=0,
-    )
-
-    # Test India scenario
-    results["india"] = test_scenario(
-        "India (25-node medium)", india_scenario(),
-        num_episodes=100, verbose_episode=0,
-    )
-
-    # Final verdict
-    print(f"\n\n{'='*70}")
-    if all(results.values()):
-        print("  ✅ ALL TESTS PASSED — Phase 1 environment is verified!")
-    else:
-        failed = [k for k, v in results.items() if not v]
-        print(f"  ❌ FAILURES: {', '.join(failed)}")
-    print(f"{'='*70}")
+        # Test India scenario
+        run_test_scenario(
+            "India (25-node medium)", india_scenario(),
+            num_episodes=100, verbose_episode=0,
+        )
+        print("\n  ✅ ALL TESTS PASSED — Phase 1 environment is verified!")
+    except Exception as e:
+        print(f"\n  ❌ FAILURES: {e}")
+        sys.exit(1)

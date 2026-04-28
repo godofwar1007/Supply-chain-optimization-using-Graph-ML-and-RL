@@ -4,6 +4,12 @@ PPO Training Loop for the Graph-based Supply Chain Agent.
 Handles rollout collection with HeteroData states, Advantage estimation (GAE),
 and the PPO clipped surrogate objective update.
 
+Key features (v2):
+  - Curriculum learning (3 phases with dynamic anomaly scaling)
+  - Mini-batch PPO updates with shuffled transitions
+  - RunningMeanStd reward / observation normalisation
+  - 5 000 episodes with cosine-annealed LR and entropy
+
 Outputs:
   - checkpoints/best_model.pt          Best model by avg reward
   - checkpoints/latest_model.pt        Latest model (saved every checkpoint_interval)
@@ -15,6 +21,7 @@ import os
 import sys
 import csv
 import time
+import math
 from datetime import datetime
 from collections import deque
 
@@ -31,6 +38,8 @@ from src.environment.supply_chain_env import SupplyChainEnv
 from src.features.feature_engine import FeatureEngine
 from src.models.ppo_agent import ActorCritic
 
+
+from stable_baselines3.common.running_mean_std import RunningMeanStd
 
 # ═══════════════════════════════════════════════════════════════════════
 # Rollout Buffer
@@ -62,8 +71,8 @@ class RolloutBuffer:
 # GAE
 # ═══════════════════════════════════════════════════════════════════════
 
-def compute_gae(rewards, values, dones, next_value, gamma=0.99, lam=0.95):
-    """Compute Generalized Advantage Estimation."""
+def compute_gae(rewards, values, dones, next_value, gamma=0.99, lam=0.92):
+    """Compute Generalized Advantage Estimation (lambda=0.92)."""
     advantages = []
     last_gae = 0
 
@@ -79,6 +88,87 @@ def compute_gae(rewards, values, dones, next_value, gamma=0.99, lam=0.95):
     returns = advantages + torch.tensor([v.item() for v in values], dtype=torch.float32)
 
     return advantages, returns
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Curriculum Scheduler
+# ═══════════════════════════════════════════════════════════════════════
+
+class CurriculumScheduler:
+    """
+    3-phase curriculum that controls anomaly difficulty AND environment
+    constraints (max hops, allowed vehicle types).
+
+    Phase 1 (easy):   anomaly 30%, max 5 hops, trucks only
+    Phase 2 (medium): anomaly 60%, max 10 hops, all vehicles
+    Phase 3 (full):   anomaly 100%, no hop limit, all vehicles
+
+    Transition trigger: delivery rate > 70 % over last 100 episodes
+    (or forced after 2x the minimum episode count for the phase).
+    """
+
+    PHASES = {
+        1: {
+            "scale": 0.3, "min_eps": 800, "label": "Easy",
+            "max_hops": 5, "vehicle_types": ["truck"],
+        },
+        2: {
+            "scale": 0.6, "min_eps": 1200, "label": "Medium",
+            "max_hops": 10, "vehicle_types": None,   # all
+        },
+        3: {
+            "scale": 1.0, "min_eps": 0, "label": "Full",
+            "max_hops": 50, "vehicle_types": None,   # all
+        },
+    }
+
+    def __init__(self):
+        self.phase = 1
+        self.phase_start_ep = 1
+        self.transition_log: list = []
+
+    def should_advance(self, episode: int, recent_delivery_rate: float) -> bool:
+        if self.phase >= 3:
+            return False
+        eps_in_phase = episode - self.phase_start_ep
+        min_eps = self.PHASES[self.phase]["min_eps"]
+        if eps_in_phase >= min_eps and recent_delivery_rate > 0.70:
+            return True
+        # Force transition after 2x min episodes regardless
+        if eps_in_phase >= min_eps * 2:
+            return True
+        return False
+
+    def advance(self, episode: int):
+        old_phase = self.phase
+        self.phase = min(self.phase + 1, 3)
+        self.phase_start_ep = episode
+        self.transition_log.append({
+            "episode": episode,
+            "from": old_phase,
+            "to": self.phase,
+        })
+
+    def apply_to_env(self, env):
+        """
+        Apply current phase settings to both the anomaly engine
+        and the environment's curriculum constraints.
+        """
+        phase_cfg = self.PHASES[self.phase]
+        env.anomaly_engine.set_phase(self.phase)
+        env.set_curriculum_phase(
+            phase=self.phase,
+            max_hops=phase_cfg["max_hops"],
+            allowed_vehicle_types=phase_cfg["vehicle_types"],
+        )
+
+    @property
+    def scale(self) -> float:
+        return self.PHASES[self.phase]["scale"]
+
+    @property
+    def label(self) -> str:
+        return self.PHASES[self.phase]["label"]
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -112,8 +202,8 @@ def save_training_curves(metrics_history, path):
     costs = [m["cost"] for m in metrics_history]
     times = [m["time_hours"] for m in metrics_history]
 
-    # Compute rolling averages (window = 20)
-    def rolling_avg(data, window=20):
+    # Compute rolling averages (window = 50)
+    def rolling_avg(data, window=50):
         out = []
         for i in range(len(data)):
             start = max(0, i - window + 1)
@@ -197,11 +287,75 @@ def save_training_curves(metrics_history, path):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Mini-batch PPO Update
+# ═══════════════════════════════════════════════════════════════════════
+
+def ppo_update(agent, optimizer, buffer, device, advantages, returns,
+               ppo_epochs=10, mini_batch_size=64, clip_param=0.2,
+               vf_coef=0.5, entropy_coef=0.05):
+    """
+    PPO clipped update with mini-batch shuffling.
+
+    Instead of iterating over every transition sequentially, we shuffle
+    indices and process mini-batches of size 64 for better gradient
+    estimates and faster convergence.
+    """
+    n = len(buffer)
+    indices = np.arange(n)
+
+    total_actor_loss = 0.0
+    total_critic_loss = 0.0
+    num_updates = 0
+
+    for _ in range(ppo_epochs):
+        np.random.shuffle(indices)
+
+        for start in range(0, n, mini_batch_size):
+            end = min(start + mini_batch_size, n)
+            mb_indices = indices[start:end]
+
+            actor_losses, critic_losses, entropies = [], [], []
+
+            for i in mb_indices:
+                state_i = buffer.states[i].to(device)
+                action_i = buffer.actions[i].to(device).unsqueeze(0)
+                old_log_prob_i = buffer.log_probs[i].to(device).squeeze(-1)
+                adv_i = advantages[i]
+                ret_i = returns[i]
+
+                _, new_log_prob, entropy, new_value = agent(state_i, action=action_i)
+
+                ratio = torch.exp(new_log_prob - old_log_prob_i)
+                surr1 = ratio * adv_i
+                surr2 = torch.clamp(ratio, 1.0 - clip_param, 1.0 + clip_param) * adv_i
+                actor_losses.append(-torch.min(surr1, surr2))
+                critic_losses.append(nn.MSELoss()(new_value, ret_i.unsqueeze(0)))
+                entropies.append(entropy)
+
+            actor_loss = torch.cat(actor_losses).mean()
+            critic_loss = torch.stack(critic_losses).mean()
+            entropy_loss = -torch.cat(entropies).mean()
+
+            loss = actor_loss + vf_coef * critic_loss + entropy_coef * entropy_loss
+
+            optimizer.zero_grad()
+            loss.backward()
+            nn.utils.clip_grad_norm_(agent.parameters(), 0.5)
+            optimizer.step()
+
+            total_actor_loss += actor_loss.item()
+            total_critic_loss += critic_loss.item()
+            num_updates += 1
+
+    return total_actor_loss / max(num_updates, 1), total_critic_loss / max(num_updates, 1)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Main Training Loop
 # ═══════════════════════════════════════════════════════════════════════
 
 def train_ppo():
-    """Main training loop with checkpointing and metrics."""
+    """Main training loop with curriculum, mini-batch PPO, and normalisation."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Output directory
@@ -211,8 +365,8 @@ def train_ppo():
     )
     os.makedirs(ckpt_dir, exist_ok=True)
 
-    print(f"🚀 Training PPO on device: {device}")
-    print(f"📁 Checkpoints → {ckpt_dir}")
+    print(f"[START] Training PPO on device: {device}")
+    print(f"[DIR] Checkpoints -> {ckpt_dir}")
 
     # ── Setup ─────────────────────────────────────────────────
     config = india_scenario()
@@ -234,24 +388,36 @@ def train_ppo():
         max_vehicles=env.max_vehicles
     ).to(device)
 
+    # ── Hyperparameters ───────────────────────────────────────
+    num_episodes = 5000
+    update_timestep = 512         # Rollout buffer size
+    mini_batch_size = 64          # Mini-batch for PPO update
+    ppo_epochs = 10
+    clip_param = 0.2
+    entropy_coef_start = 0.08    # High entropy early -> explore
+    entropy_coef_end = 0.005     # Low entropy late -> exploit
+    vf_coef = 0.5
+    checkpoint_interval = 100    # Save model every N episodes
+    log_interval = 10            # Print every N episodes
+
     optimizer = optim.Adam(agent.parameters(), lr=3e-4)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=1000, eta_min=1e-5)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=num_episodes, eta_min=5e-6
+    )
     buffer = RolloutBuffer()
 
-    # ── Hyperparameters (tuned) ───────────────────────────────
-    num_episodes = 1000
-    update_timestep = 256         # Larger batch size for more stable gradients
-    ppo_epochs = 10               # More epochs per update for better gradient signal
-    clip_param = 0.2
-    entropy_coef_start = 0.05    # High entropy early → explore
-    entropy_coef_end = 0.005     # Low entropy late → exploit
-    vf_coef = 0.5
-    checkpoint_interval = 50     # Save model every N episodes
-    log_interval = 5             # Print every N episodes
+    # ── Curriculum ────────────────────────────────────────────
+    curriculum = CurriculumScheduler()
+    curriculum.apply_to_env(env)   # Apply Phase 1 settings to env + anomaly engine
+
+    # ── Normalisation ─────────────────────────────────────────
+    reward_rms = RunningMeanStd(shape=())
+    obs_rms = RunningMeanStd(shape=(env.obs_dim,))  # Per-dim obs normalisation
 
     # ── Tracking ──────────────────────────────────────────────
     metrics_history = []         # Full history for CSV + plots
-    recent_rewards = deque(maxlen=50)
+    recent_rewards = deque(maxlen=100)
+    recent_deliveries = deque(maxlen=100)
     best_avg_reward = float("-inf")
     total_updates = 0
     time_step = 0
@@ -264,23 +430,31 @@ def train_ppo():
         writer.writerow([
             "episode", "reward", "steps", "delivered",
             "total_time_hours", "total_cost", "total_risk",
-            "path", "shipment_type", "wall_clock_s"
+            "path", "shipment_type", "wall_clock_s", "phase"
         ])
 
     print(f"{'='*70}")
     print(f"  Episodes: {num_episodes} | Update every {update_timestep} steps")
-    print(f"  Entropy: {entropy_coef_start} → {entropy_coef_end} (cosine decay)")
-    print(f"  LR: 3e-4 → 1e-5 (cosine) | PPO epochs: {ppo_epochs}")
-    print(f"  Checkpoint every {checkpoint_interval} eps | Log every {log_interval} eps")
+    print(f"  Mini-batch: {mini_batch_size} | PPO epochs: {ppo_epochs}")
+    print(f"  Entropy: {entropy_coef_start} -> {entropy_coef_end} (cosine decay)")
+    print(f"  LR: 3e-4 -> 5e-6 (cosine) | GAE λ=0.92")
+    print(f"  Curriculum: Phase 1 (easy) -> Phase 2 (medium) -> Phase 3 (full)")
+    print(f"  Checkpoint every {checkpoint_interval} eps")
     print(f"{'='*70}\n")
 
     # ── Training ──────────────────────────────────────────────
     for ep in range(1, num_episodes + 1):
-        _, _ = env.reset(seed=ep)
+        obs, _ = env.reset(seed=ep)
+
+        # Update obs_rms with the raw observation, then normalise
+        obs_rms.update(obs)
+        norm_obs = (obs - obs_rms.mean) / np.sqrt(obs_rms.var + 1e-8)
+
         state_dict = env.get_graph_state()
         state = feature_engine.build(state_dict).to(device)
 
         ep_reward = 0.0
+        ep_raw_reward = 0.0
         done = False
         truncated = False
 
@@ -290,13 +464,23 @@ def train_ppo():
             with torch.no_grad():
                 action, log_prob, _, value = agent(state)
 
-            _, reward, done, truncated, info = env.step(action.cpu().numpy())
-            ep_reward += reward
+            obs, reward, done, truncated, info = env.step(action.cpu().numpy())
+            ep_raw_reward += reward
+
+            # Update obs normaliser with raw obs from this step
+            if not (done or truncated):
+                obs_rms.update(obs)
+                norm_obs = (obs - obs_rms.mean) / np.sqrt(obs_rms.var + 1e-8)
+
+            # Normalise reward for advantage computation
+            reward_rms.update(np.array([reward]))
+            norm_reward = float((reward - reward_rms.mean) / np.sqrt(reward_rms.var + 1e-8))
+            ep_reward += norm_reward
 
             buffer.states.append(state.cpu())
             buffer.actions.append(action.cpu())
             buffer.log_probs.append(log_prob.cpu())
-            buffer.rewards.append(reward)
+            buffer.rewards.append(norm_reward)
             buffer.values.append(value.cpu())
             buffer.dones.append(done or truncated)
 
@@ -304,7 +488,7 @@ def train_ppo():
                 state_dict = env.get_graph_state()
                 state = feature_engine.build(state_dict).to(device)
 
-            # PPO Update
+            # PPO Update (mini-batch)
             if time_step % update_timestep == 0 and len(buffer) > 0:
                 with torch.no_grad():
                     if done or truncated:
@@ -320,39 +504,23 @@ def train_ppo():
                 advantages = advantages.to(device)
                 returns = returns.to(device)
 
-                for _ in range(ppo_epochs):
-                    actor_losses, critic_losses, entropies = [], [], []
+                # Cosine-decay entropy coefficient
+                progress = min(ep / num_episodes, 1.0)
+                entropy_coef = (
+                    entropy_coef_end
+                    + 0.5 * (entropy_coef_start - entropy_coef_end)
+                    * (1 + np.cos(np.pi * progress))
+                )
 
-                    for i in range(len(buffer)):
-                        state_i = buffer.states[i].to(device)
-                        action_i = buffer.actions[i].to(device).unsqueeze(0)
-                        old_log_prob_i = buffer.log_probs[i].to(device).squeeze(-1)
-                        adv_i = advantages[i]
-                        ret_i = returns[i]
-
-                        _, new_log_prob, entropy, new_value = agent(state_i, action=action_i)
-
-                        ratio = torch.exp(new_log_prob - old_log_prob_i)
-                        surr1 = ratio * adv_i
-                        surr2 = torch.clamp(ratio, 1.0 - clip_param, 1.0 + clip_param) * adv_i
-                        actor_losses.append(-torch.min(surr1, surr2))
-                        critic_losses.append(nn.MSELoss()(new_value, ret_i.unsqueeze(0)))
-                        entropies.append(entropy)
-
-                    actor_loss = torch.cat(actor_losses).mean()
-                    critic_loss = torch.stack(critic_losses).mean()
-                    entropy_loss = -torch.cat(entropies).mean()
-
-                    # Cosine-decay entropy coefficient
-                    progress = min(ep / num_episodes, 1.0)
-                    entropy_coef = entropy_coef_end + 0.5 * (entropy_coef_start - entropy_coef_end) * (1 + np.cos(np.pi * progress))
-
-                    loss = actor_loss + vf_coef * critic_loss + entropy_coef * entropy_loss
-
-                    optimizer.zero_grad()
-                    loss.backward()
-                    nn.utils.clip_grad_norm_(agent.parameters(), 0.5)
-                    optimizer.step()
+                ppo_update(
+                    agent, optimizer, buffer, device,
+                    advantages, returns,
+                    ppo_epochs=ppo_epochs,
+                    mini_batch_size=mini_batch_size,
+                    clip_param=clip_param,
+                    vf_coef=vf_coef,
+                    entropy_coef=entropy_coef,
+                )
 
                 total_updates += 1
                 buffer.clear()
@@ -367,18 +535,20 @@ def train_ppo():
 
         ep_metrics = {
             "episode": ep,
-            "reward": round(ep_reward, 2),
+            "reward": round(ep_raw_reward, 2),
             "steps": env.step_count,
             "delivered": delivered,
             "time_hours": round(env.total_time_hours, 1),
             "cost": round(env.total_cost, 0),
             "risk": round(env.total_risk, 3),
-            "path": " → ".join(env.path_taken),
+            "path": " -> ".join(env.path_taken),
             "shipment_type": env.shipment.product_type,
             "wall_clock_s": round(elapsed, 1),
+            "phase": curriculum.phase,
         }
         metrics_history.append(ep_metrics)
-        recent_rewards.append(ep_reward)
+        recent_rewards.append(ep_raw_reward)
+        recent_deliveries.append(float(delivered))
 
         # Append to CSV (incremental so we never lose data)
         with open(csv_path, "a", newline="") as f:
@@ -387,22 +557,35 @@ def train_ppo():
                 ep_metrics["episode"], ep_metrics["reward"], ep_metrics["steps"],
                 ep_metrics["delivered"], ep_metrics["time_hours"], ep_metrics["cost"],
                 ep_metrics["risk"], ep_metrics["path"], ep_metrics["shipment_type"],
-                ep_metrics["wall_clock_s"],
+                ep_metrics["wall_clock_s"], ep_metrics["phase"],
             ])
+
+        # ── Curriculum advancement ─────────────────────────────
+        if len(recent_deliveries) >= 100:
+            delivery_rate = np.mean(list(recent_deliveries))
+        else:
+            delivery_rate = np.mean(list(recent_deliveries)) if recent_deliveries else 0.0
+
+        if curriculum.should_advance(ep, delivery_rate):
+            curriculum.advance(ep)
+            curriculum.apply_to_env(env)  # Apply new phase to anomaly engine + env
+            print(f"\n  CURRICULUM -> Phase {curriculum.phase} "
+                  f"({curriculum.label}) @ ep {ep} "
+                  f"(delivery rate: {delivery_rate*100:.0f}%)\n")
 
         # ── Logging ────────────────────────────────────────────
         if ep % log_interval == 0:
             avg_r = np.mean(recent_rewards)
-            recent_del = sum(1 for m in list(metrics_history)[-50:] if m["delivered"])
-            del_rate = 100 * recent_del / min(50, ep)
+            del_rate = 100 * np.mean(list(recent_deliveries))
             print(
-                f"Ep {ep:>4d} │ R: {ep_reward:>8.1f} │ "
-                f"Avg(50): {avg_r:>7.1f} │ "
+                f"Ep {ep:>5d} │ R: {ep_raw_reward:>8.1f} │ "
+                f"Avg(100): {avg_r:>7.1f} │ "
                 f"Del: {del_rate:>4.0f}% │ "
                 f"Steps: {env.step_count:>3d} │ "
                 f"Cost: ₹{env.total_cost:>10,.0f} │ "
+                f"Phase: {curriculum.phase} │ "
                 f"Updates: {total_updates} │ "
-                f"⏱ {elapsed:.0f}s"
+                f"[TIME] {elapsed:.0f}s"
             )
 
         # ── Checkpointing ──────────────────────────────────────
@@ -412,7 +595,7 @@ def train_ppo():
             print(f"  💾 Saved latest checkpoint + training curves @ ep {ep}")
 
         # Best model
-        if len(recent_rewards) >= 20:
+        if len(recent_rewards) >= 50:
             avg = np.mean(recent_rewards)
             if avg > best_avg_reward:
                 best_avg_reward = avg
@@ -433,6 +616,7 @@ def train_ppo():
     print(f"     Delivery rate:     {100*total_deliveries/num_episodes:.1f}%")
     print(f"     Best avg reward:   {best_avg_reward:.2f}")
     print(f"     Total PPO updates: {total_updates}")
+    print(f"     Curriculum log:    {curriculum.transition_log}")
     print(f"     Outputs saved to:  {ckpt_dir}/")
     print(f"       ├── best_model.pt")
     print(f"       ├── latest_model.pt")

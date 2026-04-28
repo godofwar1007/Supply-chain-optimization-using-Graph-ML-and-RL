@@ -84,8 +84,8 @@ class SupplyChainEnv(gym.Env):
         # ── Observation / action dimensions ────────────────────────────
         # Shipment features: 10
         self.shipment_dim = 10
-        # Node features: 9 (added dest-distance)
-        self.node_dim = 9
+        # Node features: 10 (9 base + on_nominal_path)
+        self.node_dim = 10
         # Edge features: 10
         self.edge_dim = 10
         # Vehicle features: 7
@@ -126,9 +126,43 @@ class SupplyChainEnv(gym.Env):
         self._current_neighbors: List[str] = []
         self._rng = random.Random()
 
+        # Per-node visit counter for escalating loop penalty (×1.5 per revisit)
+        self._node_visit_counts: Dict[str, int] = {}
+
+        # ── Curriculum settings ────────────────────────────────────────
+        # Controlled by set_curriculum_phase(); defaults = no restriction.
+        self._curriculum_max_hops: int = self.config.max_steps
+        self._curriculum_vehicle_types: Optional[List[str]] = None  # None = all
+
         # Pre-compute all-pairs shortest path times for feasibility checks
         # We use base_time_hours as the weight (computed in config.auto_compute_times)
         self._all_pairs_base_times = dict(nx.all_pairs_dijkstra_path_length(self.graph, weight='base_time_hours'))
+
+    # ═══════════════════════════════════════════════════════════════════
+    # Curriculum control
+    # ═══════════════════════════════════════════════════════════════════
+
+    def set_curriculum_phase(
+        self,
+        phase: int,
+        max_hops: int = 50,
+        allowed_vehicle_types: Optional[List[str]] = None,
+    ) -> None:
+        """
+        Configure the environment for a curriculum phase.
+
+        Parameters
+        ----------
+        phase : int
+            1 = easy, 2 = medium, 3 = full difficulty.
+        max_hops : int
+            Maximum number of steps before truncation for this phase.
+        allowed_vehicle_types : list[str] or None
+            If given, only vehicles of these types are usable by the agent.
+            None means all vehicle types are available.
+        """
+        self._curriculum_max_hops = max_hops
+        self._curriculum_vehicle_types = allowed_vehicle_types
 
     # ═══════════════════════════════════════════════════════════════════
     # Reset
@@ -175,7 +209,15 @@ class SupplyChainEnv(gym.Env):
 
         # Reset engines
         edge_keys = get_all_edge_keys(self.config)
-        self.anomaly_engine.initialize(edge_keys, self.location_names)
+        
+        volatile_keys = []
+        for r in self.config.routes:
+            if r.is_volatile:
+                volatile_keys.append((r.source, r.target))
+                if r.bidirectional:
+                    volatile_keys.append((r.target, r.source))
+        
+        self.anomaly_engine.initialize(edge_keys, self.location_names, volatile_keys=volatile_keys)
         self.time_engine.randomize(self._rng)
 
         # Reset episode tracking
@@ -187,6 +229,9 @@ class SupplyChainEnv(gym.Env):
         self.total_risk = 0.0
         self.path_taken = [self.current_node]
         self.leg_details = []
+
+        # Reset per-node visit counter (source counts as 1 visit)
+        self._node_visit_counts = {self.current_node: 1}
 
         # Cache neighbors (no backtrack filter on first step)
         self._current_neighbors = get_neighbors(self.graph, self.current_node)
@@ -209,10 +254,10 @@ class SupplyChainEnv(gym.Env):
             if dst not in self._all_pairs_base_times.get(src, {}):
                 continue
                 
-            # Feasibility check: base time should be < 70% of shelf life
-            # (leaving 30% for anomalies and sub-optimal routing)
+            # Feasibility check: base time should be < 50% of shelf life
+            # (leaving 50% for anomalies, mode switches, and sub-optimal routing)
             base_time = self._all_pairs_base_times[src][dst]
-            if base_time < shipment.shelf_life_hours * 0.7:
+            if base_time < shipment.shelf_life_hours * 0.5:
                 return src, dst
                 
             attempts += 1
@@ -239,9 +284,19 @@ class SupplyChainEnv(gym.Env):
 
         next_node = neighbors[next_hop_idx]
 
-        # ── Validate vehicle ───────────────────────────────────────────
-        vehicle_idx = min(vehicle_idx, len(self.vehicles) - 1)
-        vehicle = self.vehicles[vehicle_idx]
+        # ── Validate vehicle (curriculum-aware) ───────────────────────
+        # If curriculum restricts vehicle types, filter the available list.
+        if self._curriculum_vehicle_types is not None:
+            allowed = [
+                v for v in self.vehicles
+                if v.vehicle_type in self._curriculum_vehicle_types
+            ]
+            if not allowed:          # safety fallback
+                allowed = self.vehicles
+        else:
+            allowed = self.vehicles
+        vehicle_idx = min(vehicle_idx, len(allowed) - 1)
+        vehicle = allowed[vehicle_idx]
 
         # ── Get route info ─────────────────────────────────────────────
         route = get_route_config(self.config, self.current_node, next_node)
@@ -302,6 +357,9 @@ class SupplyChainEnv(gym.Env):
         self.current_node = next_node
         self.path_taken.append(next_node)
 
+        # Track per-node visit count for escalating loop penalty
+        self._node_visit_counts[next_node] = self._node_visit_counts.get(next_node, 0) + 1
+
         # Log leg details
         self.leg_details.append({
             "from": self.path_taken[-2],
@@ -324,8 +382,9 @@ class SupplyChainEnv(gym.Env):
             done = True
             reward += 50.0  # substantial arrival bonus
 
-        # Max steps exceeded
-        if self.step_count >= self.config.max_steps:
+        # Max steps exceeded (use curriculum max_hops if set)
+        effective_max = min(self.config.max_steps, self._curriculum_max_hops)
+        if self.step_count >= effective_max:
             truncated = True
             reward -= 15.0  # truncation penalty
 
@@ -365,10 +424,13 @@ class SupplyChainEnv(gym.Env):
         reward += direction_reward
 
         # ── Loop penalty & step penalty ───────────────────────────────
-        visit_count = self.path_taken.count(self.current_node)
+        # Escalating penalty: base_penalty × 1.5^(revisits-1)
+        # 1st revisit: -5, 2nd: -7.5, 3rd: -11.25, ...
+        visit_count = self._node_visit_counts.get(self.current_node, 1)
         if visit_count > 1:
-            reward -= 5.0 * visit_count  # strong escalating revisit penalty
-            
+            revisits = visit_count - 1
+            reward -= 5.0 * (1.5 ** (revisits - 1)) * revisits
+
         reward -= 1.0  # Encourage finding the destination faster
 
         # ── Update neighbors for next step (anti-backtracking) ────────
@@ -539,6 +601,21 @@ class SupplyChainEnv(gym.Env):
 
         This is the interface the FeatureEngine uses to build HeteroData.
         """
+        # Precompute nominal optimal path using base edge weights only
+        # (ignores live anomalies — serves as a stable reference for the GNN).
+        try:
+            nominal_path = nx.shortest_path(
+                self.graph, self.current_node, self.destination,
+                weight="base_time_hours",
+            )
+        except (nx.NetworkXNoPath, nx.NodeNotFound):
+            nominal_path = []
+        nominal_path_set = set(nominal_path)
+        nominal_optimal_path = [
+            1 if name in nominal_path_set else 0
+            for name in self.location_names
+        ]
+
         return {
             "config": self.config,
             "graph": self.graph,
@@ -553,6 +630,7 @@ class SupplyChainEnv(gym.Env):
             "total_time_hours": self.total_time_hours,
             "dist_to_dest": self._dist_to_dest,
             "neighbors": list(self._current_neighbors),
+            "nominal_optimal_path": nominal_optimal_path,
         }
 
     def render(self):

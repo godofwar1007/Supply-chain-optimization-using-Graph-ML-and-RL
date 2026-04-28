@@ -7,6 +7,10 @@ and the GNN encoder (heterogeneous graph with typed nodes/edges).
 Node types: location, vehicle, shipment
 Edge types: route (location→location), vehicle_at (vehicle→location),
             shipment_at (shipment→location), shipment_dest (shipment→location)
+
+The location node feature vector now includes a 10th feature:
+  on_nominal_path — binary indicator (1 if this node lies on the
+  anomaly-free shortest path from current_node to destination).
 """
 
 from __future__ import annotations
@@ -57,7 +61,7 @@ class FeatureEngine:
             The dict returned by env.get_graph_state(), containing:
             config, graph, current_node, destination, shipment,
             vehicles, vehicle_positions, anomaly_engine, time_engine,
-            step_count, total_time_hours.
+            step_count, total_time_hours, nominal_optimal_path.
         """
         config: ScenarioConfig = state["config"]
         graph = state["graph"]
@@ -71,20 +75,40 @@ class FeatureEngine:
         step_count: int = state["step_count"]
         total_time_hours: float = state["total_time_hours"]
 
+        # ── Nominal optimal path (binary vector, len = num_locations) ──
+        # Precomputed by env.get_graph_state() using base edge weights
+        # (anomaly-free). Gives the GNN a stable reference signal.
+        nominal_path_vec = state.get("nominal_optimal_path", None)
+
         data = HeteroData()
         loc_names = config.location_names()
         loc_idx = {name: i for i, name in enumerate(loc_names)}
 
         # ══════════════════════════════════════════════════════════════
-        # Location node features (9 features per node)
+        # Location node features (10 features per node)
+        #   [0] lat (normalised)
+        #   [1] lng (normalised)
+        #   [2] anomaly risk score
+        #   [3] region type
+        #   [4] has warehouse
+        #   [5] warehouse fill ratio
+        #   [6] is current node
+        #   [7] is destination
+        #   [8] normalised hop-distance to destination
+        #   [9] on_nominal_path  ← NEW: 1 if node is on the base-
+        #       weight shortest path, else 0
         # ══════════════════════════════════════════════════════════════
         loc_features = []
         dist_to_dest = state.get("dist_to_dest", {})
         max_dist = max(dist_to_dest.values()) if dist_to_dest else 10
-        for loc in config.locations:
+        for idx, loc in enumerate(config.locations):
             risk = anomaly_engine.node_risk_score(loc.name)
             # Normalized distance to destination (0 = at dest, 1 = farthest)
             d = dist_to_dest.get(loc.name, max_dist)
+
+            # Binary indicator: is this node on the nominal optimal path?
+            on_path = float(nominal_path_vec[idx]) if nominal_path_vec is not None else 0.0
+
             loc_features.append([
                 loc.lat / 35.0,
                 loc.lng / 100.0,
@@ -95,6 +119,7 @@ class FeatureEngine:
                 float(loc.name == current_node),
                 float(loc.name == destination),
                 d / max(max_dist, 1),  # normalized distance to destination
+                on_path,               # NEW: nominal optimal path membership
             ])
         data["location"].x = torch.tensor(loc_features, dtype=torch.float)
 
@@ -202,7 +227,7 @@ class FeatureEngine:
         ctx = time_engine.get_context_vector()
         data.global_context = torch.tensor([ctx], dtype=torch.float)
         data.step_progress = torch.tensor(
-            [[step_count / 40.0, total_time_hours / max(shipment.shelf_life_hours, 1)]],
+            [[step_count / 50.0, total_time_hours / max(shipment.shelf_life_hours, 1)]],
             dtype=torch.float,
         )
 

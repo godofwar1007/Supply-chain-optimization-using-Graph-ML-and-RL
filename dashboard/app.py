@@ -20,6 +20,7 @@ from typing import Any, Optional
 
 import torch
 import numpy as np
+import networkx as nx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -28,8 +29,7 @@ from pydantic import BaseModel
 # Project root
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-
-from src.config.scenarios import india_scenario, small_scenario
+from src.config.scenarios import india_scenario, small_scenario, volatile_scenario, reroute_test_scenario
 from src.environment.supply_chain_env import SupplyChainEnv
 from src.features.feature_engine import FeatureEngine
 from src.models.ppo_agent import ActorCritic
@@ -46,6 +46,8 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 SCENARIOS = {
     "india": india_scenario,
     "small": small_scenario,
+    "volatile": volatile_scenario,
+    "reroute_test": reroute_test_scenario,
 }
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -108,11 +110,11 @@ def _load_agent(scenario_name: str = "india") -> Optional[ActorCritic]:
         agent.eval()
 
         _loaded_agent = agent
-        print(f"✅ Loaded trained agent from {model_path.name} (ep {checkpoint.get('episode', '?')})")
+        print(f"Loaded trained agent from {model_path.name} (ep {checkpoint.get('episode', '?')})")
         return agent
 
     except Exception as e:
-        print(f"⚠ Failed to load agent: {e}")
+        print(f"Failed to load agent: {e}")
         return None
 
 
@@ -205,8 +207,18 @@ def _build_network_json(config) -> dict:
 
 @app.get("/")
 async def root():
-    """Serve the main dashboard page."""
-    return FileResponse(str(STATIC_DIR / "index.html"))
+    """Serve the main dashboard page with dynamic API key injection."""
+    path = STATIC_DIR / "index.html"
+    if not path.exists():
+        return {"error": "index.html not found"}
+    
+    content = path.read_text()
+    # Inject API key from environment variable
+    api_key = os.getenv("GOOGLE_MAPS_API_KEY", "YOUR_API_KEY_MISSING")
+    content = content.replace("YOUR_API_KEY", api_key)
+    
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(content=content)
 
 
 @app.get("/api/network")
@@ -251,6 +263,28 @@ async def websocket_simulate(websocket: WebSocket):
         env = SupplyChainEnv(config, render_mode=None)
         obs, info = env.reset(seed=seed)
 
+        # ── REROUTE TEST: Manual Anomaly Injection ──────────────────────
+        # We inject severe anomalies on the nominal optimal path to force a reroute decision.
+        if scenario_name == "reroute_test":
+            try:
+                # Find nominal shortest path from current start to destination
+                nominal_path = nx.shortest_path(
+                    env.graph, env.current_node, env.destination, weight="base_time_hours"
+                )
+                # Inject a severe weather anomaly on the first edge of the optimal path
+                if len(nominal_path) > 1:
+                    u, v = nominal_path[0], nominal_path[1]
+                    env.anomaly_engine.force_anomaly((u, v), "weather", 25.0, 5.0, persistent=True)
+                    env.anomaly_engine.force_anomaly(v, "weather", 20.0, 4.0, persistent=True)
+                    print(f"DEBUG: Injected severe anomaly on {u} -> {v}")
+                    
+                    # Optional: second hurdle
+                    if len(nominal_path) > 2:
+                        u2, v2 = nominal_path[1], nominal_path[2]
+                        env.anomaly_engine.force_anomaly((u2, v2), "traffic", 15.0, 3.0, persistent=True)
+            except Exception as e:
+                print(f"Failed to inject reroute anomalies: {e}")
+
         # Load trained agent if requested
         agent = None
         feature_engine = None
@@ -261,12 +295,21 @@ async def websocket_simulate(websocket: WebSocket):
             else:
                 agent_mode = "random"  # Fallback
 
+        # Calculate nominal shortest path (from original source to destination)
+        try:
+            nominal_path = nx.shortest_path(
+                env.graph, env.path_taken[0], env.destination, weight="base_time_hours"
+            )
+        except:
+            nominal_path = []
+
         # Send initial state
         await websocket.send_json({
             "type": "init",
             "source": env.path_taken[0],
             "destination": env.destination,
             "agent_mode": agent_mode,
+            "nominal_path": nominal_path,
             "shipment": {
                 "product_type": env.shipment.product_type,
                 "weight_kg": round(env.shipment.weight_kg, 0),
@@ -297,6 +340,14 @@ async def websocket_simulate(websocket: WebSocket):
             src_loc = config.location_by_name(leg["from"])
             tgt_loc = config.location_by_name(leg["to"])
 
+            # Current nominal shortest path from where we are now
+            try:
+                current_optimal_path = nx.shortest_path(
+                    env.graph, env.current_node, env.destination, weight="base_time_hours"
+                )
+            except:
+                current_optimal_path = []
+
             await websocket.send_json({
                 "type": "step",
                 "step": env.step_count,
@@ -311,6 +362,8 @@ async def websocket_simulate(websocket: WebSocket):
                 "cost": round(leg["cost"].total, 0),
                 "risk": round(leg["risk"], 3),
                 "anomalies": anomalies,
+                "global_anomalies": env.anomaly_engine.get_all_active_anomalies(),
+                "optimal_path": current_optimal_path,
                 "reward": round(reward, 2),
                 "total_time": round(env.total_time_hours, 1),
                 "total_cost": round(env.total_cost, 0),
