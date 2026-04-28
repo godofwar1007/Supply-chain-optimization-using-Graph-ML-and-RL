@@ -2,66 +2,109 @@
 
 This project is a production-grade supply chain optimization system that uses **Heterogeneous Graph Transformers (HGT)** and **Reinforcement Learning (PPO)** to solve dynamic routing and vehicle selection problems.
 
-## Project Overview
+## 🚀 System Architecture
 
-- **Core Technology**: Python 3.13, PyTorch, PyTorch Geometric (GNN), Gymnasium (RL Environment), and `uv` for dependency management.
-- **Architecture**:
-    - **Environment**: A custom Gymnasium environment (`SupplyChainEnv`) that models a heterogeneous graph of Indian cities (nodes) and transport routes (edges).
-    - **Anomaly Engine**: Simulates stochastic disruptions (weather, traffic, sentiment, geopolitics) that affect route costs and risks.
-    - **Model**: An Actor-Critic architecture where an HGT encoder processes the graph state and a Pointer Network selects the next hop and vehicle mode.
-    - **Dashboard**: A modern, WebSocket-based dashboard (FastAPI + Leaflet.js) for real-time simulation streaming and visualization.
+The system follows an Actor-Critic architecture where the state is represented as a heterogeneous graph of the supply chain network.
 
-## Building and Running
-
-### Dependency Management
-The project uses `uv`. To set up the environment:
-```bash
-uv sync
+```mermaid
+graph TD
+    subgraph Environment
+        Env[SupplyChainEnv]
+        AE[AnomalyEngine]
+        TE[TimeEngine]
+        CC[CostCalculator]
+    end
+    
+    subgraph Agent
+        FE[FeatureEngine]
+        HGT[HGT Encoder]
+        PN[Pointer Network Actor]
+        V[Value Critic]
+    end
+    
+    Env -->|State Dict| FE
+    FE -->|HeteroData| HGT
+    HGT -->|Embeddings| PN
+    HGT -->|Embeddings| V
+    PN -->|Action| Env
+    AE -.->|Disruptions| Env
+    TE -.->|Traffic/Fuel| Env
 ```
 
-### Key Commands
-All major operations are accessible via `main.py`:
+## 📁 Directory Map
 
-- **Train the Agent**:
-  ```bash
-  python main.py train
-  ```
-  Runs PPO training with a 3-phase curriculum (increasing anomaly frequency).
+- `src/environment/`: Core simulation logic.
+    - `supply_chain_env.py`: Gymnasium environment.
+    - `anomaly_engine.py`: Stochastic disruptions (weather, traffic, etc.).
+    - `time_engine.py`: Temporal cycles (traffic, fuel prices).
+    - `cost_calculator.py`: Complex operational cost logic.
+- `src/features/`: Data transformation.
+    - `feature_engine.py`: Converts env state to `torch_geometric.data.HeteroData`.
+- `src/models/`: Neural architectures and training.
+    - `hgt_encoder.py`: Heterogeneous Graph Transformer.
+    - `ppo_agent.py`: Actor-Critic with Pointer Networks for variable-degree action selection.
+    - `train.py`: PPO training with curriculum support.
+- `src/agents/`: Specialized AI agents.
+    - `explainer.py`: Vertex AI / Gemini 3 Flash based path explanation agent.
+- `dashboard/`: Visualization layer.
+    - `app.py`: FastAPI backend with WebSocket streaming.
+    - `static/`: Frontend assets (Leaflet.js map, React-like UI).
+- `tests/`: Verification suite (`pytest` compatible).
 
-- **Launch Interactive Dashboard**:
-  ```bash
-  python main.py dashboard
-  ```
-  Starts the FastAPI server on port 8000. Open `http://localhost:8000` for the map interface.
+## 📊 Core Data Schema
 
-- **Run Evaluation**:
-  ```bash
-  python main.py eval    # Runs one episode with the best trained agent
-  python main.py random  # Runs one episode with random baseline
-  ```
+### HeteroData (GNN State)
+The `FeatureEngine` builds a heterogeneous graph with the following schema:
+- **Nodes**:
+    - `location`: [lat, lng, risk, region_type, warehouse_info, is_current, is_dest, dist_to_dest, on_nominal_path] (Dim: 10)
+    - `vehicle`: [type, payload, efficiency, age, maintenance, speed, capacity_check] (Dim: 7)
+    - `shipment`: [type, fragility, shelf_life, temp_sens, weight, volume, density, insurance, priority, remaining_shelf] (Dim: 10)
+- **Edges**:
+    - `(location, route, location)`: [distance, terrain, road_grading, toll, mileage_cost, base_time, anomaly_time, anomaly_cost, risk, is_to_dest] (Dim: 10)
+    - `(vehicle, vehicle_at, location)`
+    - `(shipment, shipment_at, location)`
+    - `(shipment, shipment_dest, location)`
 
-- **Run Tests**:
-  ```bash
-  pytest                            # Run all tests using pytest (recommended)
-  python tests/test_environment.py  # Run environment smoke test manually
-  python tests/test_gnn.py          # Run GNN unit test manually
-  python tests/test_ppo.py          # Run PPO unit test manually
-  ```
+### Action Space
+`MultiDiscrete([max_neighbors, max_vehicles])`
+- `action[0]`: Index into the list of current node's neighbors.
+- `action[1]`: Index into the list of available vehicles.
 
-## Testing Strategy
-The project includes a suite of verification scripts in the `tests/` directory, fully compatible with `pytest`:
-- **Environment Smoke Test**: `test_environment.py` runs random episodes to ensure no crashes, valid observation shapes, and sensible reward ranges for both Small and India scenarios.
-- **GNN Unit Test**: `test_gnn.py` verifies the forward pass of the HGT encoder, checking output embedding shapes for all node types.
-- **PPO Unit Test**: `test_ppo.py` validates both action selection and action evaluation (log-probability calculation) for the Actor-Critic model.
+## 🌪️ Simulation Mechanics
 
-## Development Conventions
+### Anomaly Engine
+Simulates stochastic disruptions:
+- **Edge Anomalies**: Weather, Traffic, Geopolitical (affects time and cost).
+- **Node Anomalies**: Port congestion, Warehouse issues (affects delay and risk).
+- **Sentiment**: Social media/news sentiment affecting route risk.
 
-- **Graph Structure**: Uses `torch_geometric.data.HeteroData`. The schema includes `Location`, `Warehouse`, `Vehicle`, and `Shipment` nodes with specific connectivity (`route`, `at`, `dest`).
-- **Checkpoints**: Models are saved in the `checkpoints/` directory as `best_model.pt`, `final_model.pt`, or `latest_model.pt`.
-- **Environment**: The environment state is fully observable as a graph, but engines (`AnomalyEngine`, `TimeEngine`, `CostCalculator`) handle the stochastic and temporal logic.
+### Reward Function
+$R = B_{arrival} - P_{time} - P_{cost} - P_{risk} - P_{spoilage} - P_{loop} - P_{step}$
+- Includes **Potential-based Reward Shaping** using shortest-path distances.
+- **Loop Penalty**: Escalates exponentially (base × 1.5^revisits).
 
-## Deployment
+## 🧠 Training & Curriculum
 
-The project is optimized for **Google Cloud Run**.
-- **Dockerfile**: Uses a slim Python 3.13 image and `uv` for minimal footprint.
-- **Cloud Run Setup**: Supports WebSockets and handles scaling to zero. Use `--no-cpu-throttling` to keep the simulation logic responsive during active WebSocket sessions.
+Training uses **PPO** with a 3-phase curriculum:
+1.  **Phase 1 (Easy)**: Few anomalies, short paths, limited vehicle types.
+2.  **Phase 2 (Medium)**: Moderate anomalies, longer paths, all vehicles.
+3.  **Phase 3 (Full)**: High anomaly frequency, full network, all constraints.
+
+## 🤖 Vertex AI Path Explainer
+
+Whenever the RL agent deviates from the nominal optimal path (Dijkstra shortest path based on base times), the system invokes a **Gemini 3 Flash** model to explain the decision.
+- **Source**: `src/agents/explainer.py`
+- **Trigger**: Detected in `dashboard/app.py` when `chosen_hop != optimal_next_hop`.
+- **Output**: Displayed in the "AI Path Insights" panel of the dashboard.
+
+## 🛠️ Key Commands
+
+- **Set up**: `uv sync`
+- **Train**: `python main.py train`
+- **Dashboard**: `python main.py dashboard` (port 8000)
+- **Evaluate**: `python main.py eval` (best trained model)
+- **Tests**: `pytest`
+
+## 🌐 Deployment
+Optimized for **Google Cloud Run**. Uses `Dockerfile` with `uv`. WebSocket support enabled. Run with `--no-cpu-throttling` for responsive simulation.
+
