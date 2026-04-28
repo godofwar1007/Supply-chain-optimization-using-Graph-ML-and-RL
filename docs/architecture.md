@@ -26,7 +26,7 @@ GNNEncoder.forward(data)
   ├── Type-specific Linear projections  →  hidden_channels
   ├── HGTConv × num_layers              →  hidden_channels
   ├── Output Linear projection          →  out_channels
-  └── Graph pooling (locs + shipments) + context_mlp(global_ctx ∥ step_progress)
+  └── Graph pooling (locations + shipments) + context_mlp(global_ctx ∥ step_progress)
       → node_embeddings, graph_embedding
       │
       ▼

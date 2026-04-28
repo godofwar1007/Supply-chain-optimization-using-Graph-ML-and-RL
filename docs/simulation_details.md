@@ -16,7 +16,7 @@ The environment is designed as an episodic Markov Decision Process (MDP). If the
 
 The world is modeled as a directed graph where:
 
-- **Nodes** represent cities or key logistics hubs. Nodes carry metadata such as geographical coordinates (lat/lng), region type (metro, port, rural, etc.), and warehouse utilisation (if present).
+- **Nodes** represent cities or key logistics hubs. Nodes carry metadata such as geographical coordinates (lat/lng), region type (metro, port, rural, etc.), and warehouse utilization (if present).
 - **Edges** represent transportation routes between cities. Edges have physical characteristics: distance (km), terrain type (flat, hilly, mountainous, coastal), road grading (quality 0–1), toll costs, and base travel time.
 
 At the beginning of an episode, the environment randomly samples a source and destination. It performs a feasibility check — using Dijkstra on nominal edge weights — to ensure the destination is reachable within 70% of the shipment's shelf life under base conditions. If the check fails, a new pair is sampled.
@@ -103,7 +103,7 @@ When the agent submits an action, `step()` executes the following sequence:
 
 | Term | Sign | Description |
 |------|------|-------------|
-| Step penalty | − | Weighted sum of normalised time, cost, and risk: `−(w_time×t + w_cost×c + w_risk×r)` |
+| Step penalty | − | Weighted sum of normalized time, cost, and risk: `−(w_time×t + w_cost×c + w_risk×r)` |
 | Spoilage penalty | − | Escalating penalty as remaining shelf life falls below threshold; massive if shelf life = 0 |
 | Potential-based shaping | ± | `+5.0 × (distance_before − distance_after)` to the destination |
 | Loop penalty | − | Escalating penalty for revisiting the same node |

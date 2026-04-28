@@ -216,7 +216,7 @@ FastAPI Server
 ### Features
 
 - **Interactive map** — CartoDB dark-tile base with city nodes and route edges as overlays.
-- **Disruption layer** — Highlighted edges/nodes by anomaly type (colour-coded).
+- **Disruption layer** — Highlighted edges/nodes by anomaly type (color-coded).
 - **Optimal path baselines** — Nominal shortest path (dashed green) and dynamic optimal from current position (dashed blue).
 - **Live metrics** — Steps, cumulative cost (₹), travel time, and cargo risk updated after every step.
 - **Step log** — Full breakdown of each decision: city chosen, vehicle used, leg cost, reward.
@@ -287,5 +287,5 @@ All configuration lives in `src/config/default_config.py`.
 - [ ] **Multi-shipment concurrency** — multiple active shipments competing for vehicle resources.
 - [ ] **Warehouse allocation** — agent can park cargo to wait out disruptions.
 - [ ] **Real data integration** — OSM road networks, live weather/news APIs.
-- [ ] **Explainability layer** — visualise GNN attention weights to show *why* the agent rerouted.
+- [ ] **Explainability layer** — visualize GNN attention weights to show *why* the agent rerouted.
 - [ ] **Hyperparameter search** — Optuna integration for automated PPO tuning.

@@ -203,12 +203,12 @@ Open `http://localhost:8000` in your browser. The dashboard lets you choose a sc
 
 ## Scenarios
 
-| Scenario | Nodes | Description |
-|---|---|---|
-| `small_test` | 4 | Minimal graph for unit tests and rapid iteration |
-| `india_large` | 40 | Full Indian logistics network — major metros, secondary cities, port hubs |
-| `india_volatile` | 40 | Same as India but "Golden Quadrilateral" routes are fast yet highly volatile |
-| `reroute_test` | 40 | India map with stochastic anomalies disabled; used for controlled rerouting demos |
+| Scenario (`config.name`) | Factory function | Nodes | Description |
+|---|---|---|---|
+| `small_test` | `small_scenario()` | 4 | Minimal graph for unit tests and rapid iteration |
+| `india_large` | `india_scenario()` | 40 | Full Indian logistics network — major metros, secondary cities, port hubs |
+| `india_volatile` | `volatile_scenario()` | 40 | Same as India but "Golden Quadrilateral" routes are fast yet highly volatile |
+| `reroute_test` | `reroute_test_scenario()` | 40 | India map with stochastic anomalies disabled; used for controlled rerouting demos |
 
 Scenarios are defined in `src/config/scenarios.py` and can be customised by modifying or subclassing `ScenarioConfig`.
 
@@ -227,7 +227,7 @@ python tests/test_ppo.py           # ActorCritic action & log-prob tests
 ```
 
 Test coverage:
-- **`test_environment.py`** — Verifies env `reset()` / `step()` on both `small_test` and `india_large` scenarios, checks observation shapes and reward ranges.
+- **`test_environment.py`** — Verifies env `reset()` / `step()` on both `small_scenario()` and `india_scenario()`, checks observation shapes and reward ranges.
 - **`test_gnn.py`** — Builds a minimal `HeteroData` object and verifies `GNNEncoder` output embedding shapes for all node types.
 - **`test_ppo.py`** — Verifies `ActorCritic.forward()` for action sampling (no action given) and log-probability evaluation (action given).
 
