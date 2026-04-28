@@ -12,11 +12,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import sys
 import random
 from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 import torch
 import numpy as np
@@ -34,6 +37,7 @@ from src.environment.supply_chain_env import SupplyChainEnv
 from src.features.feature_engine import FeatureEngine
 from src.models.ppo_agent import ActorCritic
 from src.utils.graph_utils import get_neighbors
+from src.agents.explainer import explain_deviation as _explain_deviation, is_available as _explainer_available
 
 
 app = FastAPI(title="Supply Chain Optimizer — Dashboard")
@@ -49,6 +53,15 @@ SCENARIOS = {
     "volatile": volatile_scenario,
     "reroute_test": reroute_test_scenario,
 }
+
+# ═══════════════════════════════════════════════════════════════════════
+# Vertex AI Explainer Status Endpoint
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.get("/api/explainer-status")
+async def explainer_status():
+    """Check if the Vertex AI deviation explainer is available."""
+    return {"available": _explainer_available()}
 
 # ═══════════════════════════════════════════════════════════════════════
 # Trained Agent Loader
@@ -258,6 +271,7 @@ async def websocket_simulate(websocket: WebSocket):
         seed = data.get("seed") or random.randint(0, 100000)
         speed_ms = data.get("speed_ms", 800)
         agent_mode = data.get("agent", "random")  # "random" or "trained"
+        explain_enabled = data.get("explain", True) and _explainer_available()
 
         config = SCENARIOS.get(scenario_name, SCENARIOS["india"])()
         env = SupplyChainEnv(config, render_mode=None)
@@ -348,6 +362,56 @@ async def websocket_simulate(websocket: WebSocket):
             except:
                 current_optimal_path = []
 
+            # ── AI Deviation Explanation ──────────────────────────────
+            ai_explanation = ""
+            is_deviation = False
+            if (
+                explain_enabled
+                and len(current_optimal_path) >= 2
+                and leg["to"] != current_optimal_path[1]
+            ):
+                is_deviation = True
+                # Collect anomalies on the optimal vs chosen edges
+                all_anomalies = env.anomaly_engine.get_all_active_anomalies()
+                edge_anomalies = all_anomalies.get("edges", {})
+                optimal_key = f"{leg['from']}___{current_optimal_path[1]}"
+                chosen_key = f"{leg['from']}___{leg['to']}"
+
+                explainer_ctx = {
+                    "step": env.step_count,
+                    "current_node": leg["from"],
+                    "destination": env.destination,
+                    "optimal_next_hop": current_optimal_path[1],
+                    "chosen_hop": leg["to"],
+                    "vehicle_type": leg["vehicle_type"],
+                    "time_hours": round(leg["time_hours"], 1),
+                    "cost": round(leg["cost"].total, 0),
+                    "risk": round(leg["risk"], 3),
+                    "shelf_remaining_pct": round(
+                        max(0, 100 * (1 - env.total_time_hours / env.shipment.shelf_life_hours)), 1
+                    ),
+                    "priority": env.shipment.priority,
+                    "product_type": env.shipment.product_type,
+                    "total_time": round(env.total_time_hours, 1),
+                    "total_cost": round(env.total_cost, 0),
+                    "total_risk": round(env.total_risk, 3),
+                    "path_history": list(env.path_taken),
+                    "optimal_edge_anomalies": edge_anomalies.get(optimal_key, []),
+                    "chosen_edge_anomalies": edge_anomalies.get(chosen_key, []),
+                    "total_active_anomalies": sum(
+                        len(v) for v in edge_anomalies.values()
+                    ) + sum(
+                        len(v) for v in all_anomalies.get("nodes", {}).values()
+                    ),
+                }
+                try:
+                    ai_explanation = await asyncio.to_thread(
+                        _explain_deviation, explainer_ctx
+                    )
+                except Exception as e:
+                    logger.error("Explainer call failed: %s", e)
+                    ai_explanation = ""
+
             await websocket.send_json({
                 "type": "step",
                 "step": env.step_count,
@@ -372,6 +436,8 @@ async def websocket_simulate(websocket: WebSocket):
                 "shelf_remaining_pct": round(
                     max(0, 100 * (1 - env.total_time_hours / env.shipment.shelf_life_hours)), 1
                 ),
+                "ai_explanation": ai_explanation,
+                "is_deviation": is_deviation,
             })
 
             await asyncio.sleep(speed_ms / 1000.0)

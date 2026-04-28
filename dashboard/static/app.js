@@ -86,6 +86,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const stepLog          = document.getElementById("step-log");
     const deliveryOverlay  = document.getElementById("delivery-overlay");
     const deliveryContent  = document.getElementById("delivery-content");
+    const aiToggle         = document.getElementById("ai-toggle");
+    const explainerStatus  = document.getElementById("explainer-status");
 
     const valSteps   = document.getElementById("val-steps");
     const valTime    = document.getElementById("val-time");
@@ -99,6 +101,7 @@ document.addEventListener("DOMContentLoaded", () => {
     document.addEventListener("mapReady", () => {
         loadNetwork(scenarioSelect.value);
         checkModelStatus();
+        checkExplainerStatus();
     });
 
     async function loadNetwork(scenario) {
@@ -172,6 +175,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 seed: seedInput.value ? parseInt(seedInput.value) : null,
                 speed_ms: parseInt(speedSlider.value),
                 agent: agentSelect.value,
+                explain: aiToggle.checked,
             }));
         };
 
@@ -463,7 +467,10 @@ document.addEventListener("DOMContentLoaded", () => {
         entry.innerHTML = `
             <div class="flex items-center justify-between mb-2">
                 <span class="text-[9px] font-black text-primary uppercase tracking-[0.2em]">Step ${data.step}</span>
-                <span class="material-symbols-outlined text-sm text-outline opacity-40">${icon}</span>
+                <div class="flex items-center gap-2">
+                    ${data.is_deviation ? '<span class="deviation-badge"><span class="material-symbols-outlined" style="font-size:10px">alt_route</span> DEVIATED</span>' : ''}
+                    <span class="material-symbols-outlined text-sm text-outline opacity-40">${icon}</span>
+                </div>
             </div>
             <div class="text-[11px] font-bold mb-2 tracking-tight">${data.from} → ${data.to}</div>
             <div class="grid grid-cols-3 gap-2 opacity-60">
@@ -472,6 +479,15 @@ document.addEventListener("DOMContentLoaded", () => {
                 <div class="text-[9px] font-mono">⚠ ${data.risk.toFixed(2)}</div>
             </div>
             ${anomaliesHtml ? `<div class="mt-2">${anomaliesHtml}</div>` : ""}
+            ${data.ai_explanation ? `
+                <div class="ai-insight-card">
+                    <div class="ai-insight-header">
+                        <span class="material-symbols-outlined sparkle-icon">auto_awesome</span>
+                        <span class="label">AI Path Insight</span>
+                    </div>
+                    <div class="ai-insight-body">${data.ai_explanation}</div>
+                </div>
+            ` : ""}
         `;
         
         stepLog.prepend(entry);
@@ -501,6 +517,26 @@ document.addEventListener("DOMContentLoaded", () => {
             const d = await resp.json();
             agentStatus.innerHTML = d.available ? `<span class="text-[#44ddc1]">●</span> GNN ENGINE: ${d.model}` : "⚠ GNN ENGINE: OFFLINE";
         } catch (e) {}
+    }
+
+    async function checkExplainerStatus() {
+        try {
+            const resp = await fetch("/api/explainer-status");
+            const d = await resp.json();
+            if (d.available) {
+                explainerStatus.innerHTML = '<span class="text-[#44ddc1]">●</span> GEMINI 2.5 FLASH: ONLINE';
+                explainerStatus.classList.remove('text-outline');
+                explainerStatus.classList.add('text-primary');
+            } else {
+                explainerStatus.innerHTML = '⚠ AI ENGINE: OFFLINE';
+                aiToggle.checked = false;
+                aiToggle.disabled = true;
+            }
+        } catch (e) {
+            explainerStatus.innerHTML = '⚠ AI ENGINE: OFFLINE';
+            aiToggle.checked = false;
+            aiToggle.disabled = true;
+        }
     }
 
     scenarioSelect.addEventListener("change", () => loadNetwork(scenarioSelect.value));

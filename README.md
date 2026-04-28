@@ -1,5 +1,7 @@
 # Supply Chain Optimization with Graph ML & RL
 
+**Developed for the Google Solution Challenge 2026**
+
 A production-grade supply chain optimization system that uses **Heterogeneous Graph Transformers (HGT)** and **Proximal Policy Optimization (PPO)** to solve dynamic routing and vehicle selection problems across a realistic logistics network of Indian cities.
 
 ---
@@ -246,6 +248,7 @@ The real-time dashboard is powered by **FastAPI** (backend) and **Leaflet.js** (
 - **Interactive map** — CartoDB dark-tile base with nodes (cities) and edges (routes) rendered as overlays.
 - **Disruption layer** — Edges/nodes highlighted by active anomaly type (weather, traffic, sentiment, geopolitical).
 - **Optimal path baselines** — Nominal shortest path (dashed green) and dynamic optimal path from current position (dashed blue).
+- **AI Path Insights** — Uses Gemini 2.5 Flash on Vertex AI to generate natural-language explanations when the RL agent deviates from the optimal path.
 - **Live metrics** — Steps, cumulative time, cost (₹), and cargo risk updated via WebSocket after every step.
 - **Step log** — Detailed breakdown of every routing decision including vehicle chosen, leg cost, and reward.
 - **Agent selector** — Switch between Random Baseline and Trained GNN+RL without restarting the server.

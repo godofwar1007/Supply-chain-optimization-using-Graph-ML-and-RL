@@ -241,7 +241,8 @@ Phase 3 (Full, scale=1.0):
 Cloud Run (single container, scales to zero)
   └── uvicorn  →  FastAPI app (dashboard/app.py)
        ├── GET  /          → Serves static HTML/JS/CSS
-       └── WS   /ws        → Streams simulation events
+       ├── GET  /api/explainer-status → AI Explainer health check
+       └── WS   /ws        → Streams simulation events & async Gemini AI explanations
               │
               └── SupplyChainEnv + ActorCritic (loaded from checkpoints/best_model.pt)
 ```

@@ -9,6 +9,7 @@ This project implements a production-grade supply chain optimization system usin
 - **Anomaly Awareness**: Native handling of four stochastic disruption types: weather, traffic, social sentiment, and geopolitical events.
 - **Multi-Objective Optimization**: Simultaneous minimization of travel time, monetary cost, and cargo risk.
 - **Curriculum Learning**: Automatic 3-phase training progression that ramps anomaly difficulty as the agent improves.
+- **AI Path Insights**: Uses Gemini 2.5 Flash on Vertex AI to generate natural-language explanations when the RL agent deviates from optimal routes.
 - **Real-Time Visualization**: WebSocket-based dashboard built on FastAPI and Leaflet.js.
 
 ---
@@ -218,6 +219,7 @@ FastAPI Server
 - **Interactive map** — CartoDB dark-tile base with city nodes and route edges as overlays.
 - **Disruption layer** — Highlighted edges/nodes by anomaly type (color-coded).
 - **Optimal path baselines** — Nominal shortest path (dashed green) and dynamic optimal from current position (dashed blue).
+- **AI Path Insights** — Uses Gemini 2.5 Flash on Vertex AI to provide natural-language explanations when the RL agent deviates from the optimal path.
 - **Live metrics** — Steps, cumulative cost (₹), travel time, and cargo risk updated after every step.
 - **Step log** — Full breakdown of each decision: city chosen, vehicle used, leg cost, reward.
 - **Agent & scenario selectors** — Switch between Random / Trained GNN+RL and between India / Volatile / Small scenarios.
@@ -281,4 +283,5 @@ All configuration lives in `src/config/default_config.py`.
 - 3-phase curriculum learning with automatic phase transitions.
 - Real-time WebSocket dashboard with Leaflet.js map.
 - Optimal path baselines (static nominal and dynamic from current node).
+- AI Path Deviation Explainer Agent using Gemini 2.5 Flash (Vertex AI).
 - Docker + Cloud Run deployment.
