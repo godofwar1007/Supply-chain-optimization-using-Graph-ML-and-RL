@@ -6,7 +6,9 @@ import networkx as nx
 import torch
 from tqdm import tqdm
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Ensure project root is on the path
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, PROJECT_ROOT)
 
 from src.config.scenarios import india_scenario
 from src.environment.supply_chain_env import SupplyChainEnv
@@ -16,7 +18,7 @@ from src.models.ppo_agent import ActorCritic
 
 def load_agent(env, device):
     """Load the best trained model checkpoint."""
-    ckpt_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "checkpoints")
+    ckpt_dir = os.path.join(PROJECT_ROOT, "checkpoints")
     model_path = os.path.join(ckpt_dir, "best_model.pt")
     
     if not os.path.exists(model_path):

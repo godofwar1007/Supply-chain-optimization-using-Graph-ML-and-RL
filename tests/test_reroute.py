@@ -3,12 +3,14 @@ import sys
 import networkx as nx
 import torch
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Ensure project root is on the path
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, PROJECT_ROOT)
 
 from src.config.scenarios import india_scenario
 from src.environment.supply_chain_env import SupplyChainEnv
 from src.features.feature_engine import FeatureEngine
-from evaluate import load_agent
+from src.evaluate import load_agent
 from src.environment.anomaly_engine import ActiveAnomaly
 
 def main():

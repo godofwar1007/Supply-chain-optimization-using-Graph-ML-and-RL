@@ -94,6 +94,7 @@ Traditional supply chain routing relies on static heuristics that break under re
 ├── pyproject.toml            # uv project & dependency manifest
 ├── Dockerfile                # Production image for Cloud Run
 ├── src/
+│   ├── evaluate.py           # Multi-policy evaluation suite
 │   ├── config/
 │   │   ├── default_config.py # Dataclasses: LocationConfig, RouteConfig, VehicleConfig, …
 │   │   └── scenarios.py      # small_scenario(), india_scenario(), volatile_scenario()
@@ -117,12 +118,15 @@ Traditional supply chain routing relies on static heuristics that break under re
 ├── tests/
 │   ├── test_environment.py      # Smoke tests for env reset/step
 │   ├── test_gnn.py              # GNN forward-pass shape checks
-│   └── test_ppo.py              # ActorCritic action selection & log-prob tests
-└── docs/
-    ├── doc.md                   # System overview & component reference
-    ├── simulation_details.md    # Environment MDP mechanics
-    ├── architecture.md          # Deep-dive: GNN, PPO, curriculum
-    └── api_reference.md         # Module-level API reference
+│   ├── test_ppo.py              # ActorCritic action selection & log-prob tests
+│   └── test_reroute.py          # Controlled rerouting unit test
+├── docs/
+│   ├── doc.md                   # System overview & component reference
+│   ├── simulation_details.md    # Environment MDP mechanics
+│   ├── architecture.md          # Deep-dive: GNN, PPO, curriculum
+│   ├── api_reference.md         # Module-level API reference
+│   └── DEMO.md                  # 3-minute demo script
+└── research/                 # Archived experiments and smaller attempts
 ```
 
 ---
@@ -317,10 +321,3 @@ The entire scenario is controlled by dataclasses in `src/config/default_config.p
 - Real-time WebSocket dashboard with Leaflet.js map
 - Optimal path baselines (static and dynamic)
 - Docker + Cloud Run deployment
-
-### 🚀 Planned
-- [ ] **Multi-shipment concurrency** — multiple active shipments competing for vehicle resources
-- [ ] **Warehouse allocation** — agent can park cargo to wait out disruptions
-- [ ] **Real data integration** — OSM road networks, live weather/news APIs
-- [ ] **Explainability layer** — visualise GNN attention weights to show *why* the agent rerouted
-- [ ] **Hyperparameter search** — Optuna integration for automated PPO tuning
